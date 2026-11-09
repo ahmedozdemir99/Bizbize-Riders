@@ -1,0 +1,6 @@
+{
+  "name": "BizBize Riders",
+  "description": "Motorcu ve sürücü toplulukları için anlık mesajlaşma, sesli/görüntülü grup aramaları, canlı konum ve kortej iletişim ağı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
