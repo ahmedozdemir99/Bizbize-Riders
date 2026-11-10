@@ -116,6 +116,9 @@ CREATE TABLE IF NOT EXISTS public.messages (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT false
 );
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reply_to_id TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS read_by JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Allow public all messages" ON public.messages;
 CREATE POLICY "Allow public all messages" ON public.messages FOR ALL USING (true) WITH CHECK (true);

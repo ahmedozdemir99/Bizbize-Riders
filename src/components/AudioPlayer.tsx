@@ -77,10 +77,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({ src }) => {
             return (
               <span
                 key={i}
-                className={`flex-1 rounded-full transition-all duration-150 ${
+                className={`flex-1 rounded-full transition-all duration-300 ${
                   isActive ? 'bg-orange-500' : 'bg-zinc-700'
-                } ${isPlaying && isActive ? 'animate-pulse' : ''}`}
-                style={{ height: `${Math.max(4, (height / 100) * 18)}px` }}
+                } ${isPlaying ? 'animate-bounce' : ''}`}
+                style={{ 
+                  height: `${Math.max(4, (height / 100) * 18)}px`,
+                  animationDelay: `${i * 0.1}s`,
+                  animationDuration: '0.6s'
+                }}
               />
             );
           })}

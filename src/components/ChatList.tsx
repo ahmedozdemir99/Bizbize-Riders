@@ -1,6 +1,7 @@
 import React from 'react';
 import { Search, Plus, Trash2, MessageSquare, Video, UserX, Users, Radio, UserPlus } from 'lucide-react';
 import { CortegeGroup, DirectContact, UserProfile } from '../types';
+import { WeatherWidget } from './WeatherWidget';
 
 interface ChatListProps {
   searchQuery: string;
@@ -47,8 +48,10 @@ export const ChatList: React.FC<ChatListProps> = ({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 carbon-bg relative">
+
       {/* Search Input Bar */}
-      <div className="p-3 bg-zinc-950/80 border-b border-zinc-900">
+      <div className="p-3 bg-zinc-950/80 border-b border-zinc-900 space-y-3">
+        <WeatherWidget />
         <div className="flex items-center gap-2">
           <div className="rounded-2xl flex items-center px-4 py-2.5 biker-input flex-1">
             <Search className="w-4 h-4 text-zinc-500 shrink-0" />

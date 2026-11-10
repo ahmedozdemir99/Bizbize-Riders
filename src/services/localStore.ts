@@ -52,6 +52,14 @@ export function saveLocalMessage(groupId: string, message: Message): Message[] {
   return updated;
 }
 
+export function updateLocalMessages(groupId: string, messages: Message[]): void {
+  try {
+    localStorage.setItem(LOCAL_MSG_KEY_PREFIX + groupId, JSON.stringify(messages.slice(-500)));
+  } catch (err) {
+    console.warn('Failed to update local messages:', err);
+  }
+}
+
 export function clearLocalMessages(groupId: string): void {
   try {
     localStorage.removeItem(LOCAL_MSG_KEY_PREFIX + groupId);

@@ -22,6 +22,13 @@ export interface Message {
   time: number;
   created_at?: string;
   deleted?: boolean;
+  reactions?: string[];
+  read_by?: string[];
+  reply_to_id?: string;
+  reply_preview?: {
+    sender_name: string;
+    text?: string | null;
+  };
 }
 
 export interface UserProfile {

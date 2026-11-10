@@ -19,6 +19,7 @@ import { soundEffects } from './services/sound';
 import { 
   getLocalMessages, 
   saveLocalMessage, 
+  updateLocalMessages,
   clearLocalMessages, 
   subscribeLocalBroadcast,
   broadcastLocalEvent 
@@ -40,6 +41,10 @@ import { BackupModal } from './components/Modals/BackupModal';
 import { IncomingCallModal } from './components/Modals/IncomingCallModal';
 import { IncomingGroupCallModal } from './components/Modals/IncomingGroupCallModal';
 import { AddRiderModal } from './components/Modals/AddRiderModal';
+import { ProfileSettingsModal } from './components/Modals/ProfileSettingsModal';
+import { GroupMapModal } from './components/Modals/GroupMapModal';
+import { RoadAlertModal } from './components/Modals/RoadAlertModal';
+import { VoiceAssistantModal } from './components/Modals/VoiceAssistantModal';
 
 const DEFAULT_GROUPS: Record<string, { info: CortegeGroup }> = {
   global: {
@@ -104,6 +109,11 @@ export default function App() {
   const [isBackupOpen, setIsBackupOpen] = useState<boolean>(false);
   const [isSqlModalOpen, setIsSqlModalOpen] = useState<boolean>(false);
   const [isAddRiderOpen, setIsAddRiderOpen] = useState<boolean>(false);
+  const [isProfileSettingsOpen, setIsProfileSettingsOpen] = useState<boolean>(false);
+  const [isGroupMapOpen, setIsGroupMapOpen] = useState<boolean>(false);
+  const [isRoadAlertOpen, setIsRoadAlertOpen] = useState<boolean>(false);
+  const [isVoiceAssistantOpen, setIsVoiceAssistantOpen] = useState<boolean>(false);
+  const [userAvatar, setUserAvatar] = useState<string | null>(() => localStorage.getItem('rider_avatar'));
 
   // Lightbox Media Viewer
   const [mediaViewerState, setMediaViewerState] = useState<{
@@ -427,7 +437,13 @@ export default function App() {
     loadMessages(id);
   };
 
-  const handleSendMessage = async (type: MessageType, content: string, filename?: string) => {
+  const handleSendMessage = async (
+    type: MessageType, 
+    content: string, 
+    filename?: string, 
+    replyToId?: string,
+    replyPreview?: { sender_name: string; text?: string | null }
+  ) => {
     if (!activeChatId || !currentUser) return;
 
     const directRecipient = activeChatId.startsWith('dm_') ? dmContacts[activeChatId]?.id : null;
@@ -443,6 +459,8 @@ export default function App() {
       filename: filename || null,
       time: Date.now(),
       deleted: false,
+      reply_to_id: replyToId,
+      reply_preview: replyPreview,
     };
 
     // Always persist to local store first
@@ -454,14 +472,28 @@ export default function App() {
     const client = getSupabaseClient();
     if (client) {
       try {
-        const { error } = await client.from('messages').insert([row]);
-        if (error) {
-          setStatusText('Yerel Mod (Sunucu Çevrimdışı)');
-          setIsOnlineOk(false);
+        const payload: Record<string, any> = {
+          group_id: row.group_id,
+          sender_id: row.sender_id,
+          recipient_id: row.recipient_id,
+          sender_name: row.sender_name,
+          type: row.type,
+          text: row.text,
+          url: row.url,
+          filename: row.filename,
+          time: row.time,
+          deleted: false,
+        };
+        if (replyToId) payload.reply_to_id = replyToId;
+
+        const { error } = await client.from('messages').insert([payload]);
+        if (error && payload.reply_to_id) {
+          // If the remote table doesn't have reply_to_id column, retry insert without it
+          delete payload.reply_to_id;
+          await client.from('messages').insert([payload]);
         }
       } catch (err) {
-        setStatusText('Yerel Mod (Sunucu Çevrimdışı)');
-        setIsOnlineOk(false);
+        console.warn('Supabase message insert background fallback:', err);
       }
     }
   };
@@ -572,8 +604,16 @@ export default function App() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-        video: type === 'video',
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: type === 'video' ? {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 24 }
+        } : false,
       });
 
       setLocalStream(stream);
@@ -659,8 +699,16 @@ export default function App() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: call.type === 'video',
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: call.type === 'video' ? {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          frameRate: { ideal: 24 }
+        } : false,
       });
 
       setLocalStream(stream);
@@ -798,9 +846,10 @@ export default function App() {
               onOpenBackup={() => setIsBackupOpen(true)}
               onOpenRiders={() => setIsRidersOpen(true)}
               onOpenSqlModal={() => setIsSqlModalOpen(true)}
+              onOpenProfileSettings={() => setIsProfileSettingsOpen(true)}
+              onOpenVoiceAssistant={() => setIsVoiceAssistantOpen(true)}
               onLogout={handleLogout}
             />
-
             {!activeChatId ? (
               <ChatList
                 searchQuery={searchQuery}
@@ -840,6 +889,21 @@ export default function App() {
                 onOpenMediaViewer={(url, type, filename) =>
                   setMediaViewerState({ url, type, filename })
                 }
+                onShowGroupMap={() => setIsGroupMapOpen(true)}
+                onOpenRoadAlert={() => setIsRoadAlertOpen(true)}
+                onUpdateMessage={(messageId, reactions) => {
+                  const updatedMessages = messages.map(m =>
+                    m.id === messageId ? { ...m, reactions } : m
+                  );
+                  setMessages(updatedMessages);
+                  if (activeChatId) {
+                    updateLocalMessages(activeChatId, updatedMessages);
+                  }
+                  const client = getSupabaseClient();
+                  if (client && messageId) {
+                      client.from('messages').update({ reactions }).eq('id', messageId).then();
+                  }
+                }}
               />
             )}
           </>
@@ -1011,6 +1075,52 @@ export default function App() {
         isOpen={isAddRiderOpen}
         onClose={() => setIsAddRiderOpen(false)}
         onAddRider={handleAddRider}
+      />
+      <ProfileSettingsModal
+        isOpen={isProfileSettingsOpen}
+        onClose={() => setIsProfileSettingsOpen(false)}
+        currentName={currentUser}
+        currentAvatar={userAvatar}
+        onSave={(name, avatar) => {
+          setUsername(name);
+          setCurrentUser(name);
+          if (avatar) {
+            localStorage.setItem('rider_avatar', avatar);
+            setUserAvatar(avatar);
+          } else {
+            localStorage.removeItem('rider_avatar');
+            setUserAvatar(null);
+          }
+          showToast('Profil güncellendi!');
+        }}
+      />
+      <GroupMapModal
+        isOpen={isGroupMapOpen}
+        onClose={() => setIsGroupMapOpen(false)}
+        messages={messages}
+      />
+      <RoadAlertModal
+        isOpen={isRoadAlertOpen}
+        onClose={() => setIsRoadAlertOpen(false)}
+        onSendAlert={(alert) => handleSendMessage('text', alert)}
+      />
+      <VoiceAssistantModal
+        isOpen={isVoiceAssistantOpen}
+        onClose={() => setIsVoiceAssistantOpen(false)}
+        activeChatId={activeChatId}
+        activeChatName={activeChatName}
+        onSendMessage={(text) => handleSendMessage('text', text)}
+        onOpenGroupMap={() => setIsGroupMapOpen(true)}
+        onOpenRoadAlert={() => setIsRoadAlertOpen(true)}
+        onOpenRiders={() => setIsRidersOpen(true)}
+        onBackToChatList={() => setActiveChatId(null)}
+        onToggleSound={() => setSoundEnabled(!soundEnabled)}
+        soundEnabled={soundEnabled}
+        onStartCall={(type) => {
+          if (activeChatId) {
+            handleStartCall({ id: activeChatId, name: activeChatName }, type);
+          }
+        }}
       />
 
       {/* Toast Notification Banner */}
