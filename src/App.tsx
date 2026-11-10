@@ -647,6 +647,7 @@ export default function App() {
           deleted: false,
         };
         if (replyToId) payload.reply_to_id = replyToId;
+        if (replyPreview) payload.reply_preview = replyPreview;
 
         let { error } = await client.from('messages').insert([payload]);
         if (error?.code === 'PGRST204' && payload.reply_to_id) {

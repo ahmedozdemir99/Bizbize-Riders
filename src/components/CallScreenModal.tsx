@@ -153,24 +153,6 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
           <div className="text-sm font-semibold text-emerald-400 bg-emerald-950/60 px-4 py-1 rounded-full border border-emerald-500/30">
             {statusText}
           </div>
-
-          {/* WebRTC Diagnostics Monitor */}
-          <div className="mt-3 bg-zinc-950/90 border border-zinc-800 rounded-2xl p-3 max-w-xs w-full text-left font-mono text-[11px] text-zinc-300 space-y-1 shadow-xl">
-            <div className="text-[10px] text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center justify-between">
-              <span>WebRTC Diagnostik</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            </div>
-            <div><span className="text-zinc-500">ICE State:</span> <span className="text-white">{peerConnection?.iceConnectionState || 'new'}</span></div>
-            <div><span className="text-zinc-500">Signaling:</span> <span className="text-white">{peerConnection?.signalingState || 'stable'}</span></div>
-            <div><span className="text-zinc-500">Connection:</span> <span className="text-white">{peerConnection?.connectionState || 'new'}</span></div>
-            <div><span className="text-zinc-500">Local Stream:</span> <span className={localStream ? 'text-emerald-400' : 'text-red-400'}>{localStream ? 'Aktif (' + localStream.getTracks().length + ' track)' : 'Yok'}</span></div>
-            <div><span className="text-zinc-500">Remote Stream:</span> <span className={remoteStream ? 'text-emerald-400' : 'text-amber-400'}>{remoteStream ? 'Bağlandı (' + remoteStream.getTracks().length + ' track)' : 'Bekleniyor...'}</span></div>
-            <div className="border-t border-zinc-800 pt-1 mt-1 flex justify-between">
-              <span>Paket Kaybı: <strong className={packetLoss > 5 ? 'text-red-400' : 'text-emerald-400'}>%{packetLoss}</strong></span>
-              <span>Jitter: <strong className="text-sky-400">{jitter}ms</strong></span>
-              <span>RTT: <strong className="text-orange-400">{rtt}ms</strong></span>
-            </div>
-          </div>
         </div>
       )}
 
