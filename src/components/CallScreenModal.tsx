@@ -50,7 +50,7 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[300] bg-black flex flex-col items-center justify-center overflow-hidden">
+    <div className="fixed inset-0 z-[700] bg-black flex flex-col items-center justify-center overflow-hidden">
       {/* 1-on-1 Video Stream */}
       {!isGroupCall && callType === 'video' && remoteStream && (
         <video
@@ -111,9 +111,9 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
         </div>
       )}
 
-      {/* Local PIP Video */}
+      {/* Local PIP Video (Selfie / Front-Camera Preview with clear indicator) */}
       {callType === 'video' && localStream && (
-        <div className="absolute right-4 top-4 w-28 h-40 object-cover rounded-2xl border-2 border-orange-500/60 shadow-2xl bg-zinc-900 overflow-hidden z-20">
+        <div className="absolute right-4 top-4 w-28 h-40 rounded-2xl border-2 border-orange-500 shadow-2xl bg-zinc-900 overflow-hidden z-20 group">
           <video
             ref={(node) => {
               if (node && node.srcObject !== localStream) {
@@ -123,8 +123,12 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
             autoPlay
             muted
             playsInline
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover -scale-x-100"
           />
+          <div className="absolute bottom-1 inset-x-1 bg-black/85 backdrop-blur-sm rounded-lg px-1.5 py-0.5 text-[9px] font-bold text-white text-center flex items-center justify-center gap-1 border border-white/10 shadow">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Siz (Ön Kamera)</span>
+          </div>
         </div>
       )}
 

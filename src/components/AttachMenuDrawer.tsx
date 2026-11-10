@@ -112,7 +112,7 @@ export const AttachMenuDrawer: React.FC<AttachMenuDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[250] bg-black/60 backdrop-blur-sm flex items-end justify-center">
+    <div className="fixed inset-0 z-[600] bg-black/75 backdrop-blur-sm flex items-end justify-center">
       <div className="w-full max-w-[480px] bg-zinc-950 border-t-2 border-orange-500/80 rounded-t-[32px] p-6 shadow-2xl relative animate-in slide-in-from-bottom duration-300">
         {/* Top Handle Bar */}
         <div className="flex flex-col items-center mb-5 cursor-pointer" onClick={onClose}>

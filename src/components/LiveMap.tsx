@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { Shield, ShieldAlert, ShieldCheck, Gauge, Plus, RefreshCw, Eye, EyeOff, Info } from 'lucide-react';
+import { Shield, ShieldAlert, ShieldCheck, Gauge, Plus, RefreshCw, Eye, EyeOff, Info, Navigation, ExternalLink } from 'lucide-react';
 import { Message, LocationData } from '../types';
 
 declare global {
@@ -348,9 +348,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
   }, [activeRiders, safeDistanceMeters]);
 
   return (
-    <div className={`relative rounded-2xl overflow-hidden border border-zinc-700 bg-zinc-950 flex flex-col ${className}`}>
+    <div className={`relative isolate rounded-2xl overflow-hidden border border-zinc-700 bg-zinc-950 flex flex-col ${className}`}>
       {/* Top Map Floating Control Bar */}
-      <div className="absolute top-2.5 left-2.5 right-2.5 z-[1000] flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
+      <div className="absolute top-2.5 left-2.5 right-2.5 z-20 flex flex-wrap items-center justify-between gap-1.5 pointer-events-none">
         {/* Assistant Activation Toggle */}
         <div className="pointer-events-auto flex items-center gap-1 bg-zinc-950/90 border border-zinc-800 rounded-xl p-1 shadow-2xl backdrop-blur-md">
           <button
@@ -404,19 +404,33 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
         )}
 
         {/* Demo Riders Toggle (For testing without multiple physical devices) */}
-        <div className="pointer-events-auto bg-zinc-950/90 border border-zinc-800 rounded-xl p-1 shadow-2xl backdrop-blur-md">
+        <div className="pointer-events-auto flex items-center gap-1">
           <button
             onClick={() => setIncludeDemoRiders((prev) => !prev)}
-            className={`py-1 px-2 rounded-lg text-[11px] font-bold flex items-center gap-1 transition ${
+            className={`py-1 px-2 rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-2xl backdrop-blur-md ${
               includeDemoRiders
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                : 'bg-zinc-950/90 text-zinc-400 hover:text-white border border-zinc-800 hover:bg-zinc-800'
             }`}
             title="Haritaya simüle edilmiş kortej sürücüleri ekle"
           >
             <Plus className="w-3 h-3" />
-            <span>{includeDemoRiders ? 'Kortej (Aktif)' : '+ Kortej Simüle Et'}</span>
+            <span>{includeDemoRiders ? 'Kortej (Aktif)' : '+ Kortej'}</span>
           </button>
+
+          {/* Quick Google Maps Launch */}
+          {activeRiders.length > 0 && (
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${activeRiders[0].lat},${activeRiders[0].lng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-1 px-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xl backdrop-blur-md transition biker-btn active:scale-95 border border-orange-400/30"
+              title="Kortej konumunu Google Haritalar'da aç"
+            >
+              <Navigation className="w-3 h-3 fill-current" />
+              <span>Haritalar</span>
+            </a>
+          )}
         </div>
       </div>
 
@@ -454,7 +468,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
 
       {/* Info Rule Modal */}
       {showInfoModal && (
-        <div className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[700] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-orange-500/50 rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-3">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
               <div className="flex items-center gap-2 text-orange-400 font-bold text-sm">

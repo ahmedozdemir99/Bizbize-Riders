@@ -24,7 +24,7 @@ export const RoadAlertModal: React.FC<RoadAlertModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/90 z-[600] flex items-center justify-center p-4">
       <div className="bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-sm p-6 shadow-2xl">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">

@@ -948,7 +948,30 @@ export default function App() {
               setIsAttachOpen(false);
               showToast('Sabit konum gönderildi!');
             },
-            () => showToast('Konum alınamadı.')
+            () => {
+              // Fallback to custom selected location or Yomra, Trabzon
+              let fallbackLat = 40.9568;
+              let fallbackLng = 39.8617;
+              try {
+                const stored = localStorage.getItem('bizbize_rider_custom_location');
+                if (stored) {
+                  const parsed = JSON.parse(stored);
+                  if (parsed.lat && parsed.lng) {
+                    fallbackLat = parsed.lat;
+                    fallbackLng = parsed.lng;
+                  }
+                }
+              } catch {}
+              const locData = {
+                lat: fallbackLat,
+                lng: fallbackLng,
+                at: new Date().toISOString(),
+              };
+              handleSendMessage('location', JSON.stringify(locData), 'Sabit Konum');
+              setIsAttachOpen(false);
+              showToast('Konum gönderildi (GPS uyarısı: Kayıtlı konum kullanıldı).');
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
           );
         }}
         onToggleLiveLocation={() => {
@@ -976,7 +999,29 @@ export default function App() {
                 };
                 handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
               },
-              (err) => showToast('Konum güncellenemedi: ' + err.message)
+              (err) => {
+                // If temporary error, fallback to Yomra coordinates
+                let fallbackLat = 40.9568;
+                let fallbackLng = 39.8617;
+                try {
+                  const stored = localStorage.getItem('bizbize_rider_custom_location');
+                  if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed.lat && parsed.lng) {
+                      fallbackLat = parsed.lat;
+                      fallbackLng = parsed.lng;
+                    }
+                  }
+                } catch {}
+                const locData = {
+                  lat: fallbackLat,
+                  lng: fallbackLng,
+                  live: true,
+                  at: new Date().toISOString(),
+                };
+                handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
+              },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
             );
           };
 

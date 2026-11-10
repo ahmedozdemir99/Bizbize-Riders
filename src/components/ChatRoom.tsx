@@ -10,6 +10,7 @@ import {
   MapPin,
   AlertTriangle,
   ExternalLink,
+  Navigation,
   X,
   Mic,
   Square,
@@ -366,24 +367,49 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 )
               )}
 
-              {/* Live Map for Group Members */}
+              {/* Live Map for Group Members with Direct Google Maps Link */}
               {m.type === 'location' && (() => {
                 let loc: LocationData | null = null;
                 try {
                   loc = JSON.parse(m.url || '{}');
                 } catch {}
 
-                if (loc?.live) {
+                if (loc?.live && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+                  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`;
                   return (
-                    <div className="mt-2">
-                       <LiveMap messages={messages.filter(msg => msg.type === 'location')} />
+                    <div className="mt-2 space-y-2 w-full">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                          <span>CANLI KONUM PAYLAŞIMI</span>
+                        </span>
+                        <span className="text-[10px] text-zinc-400 font-mono">
+                          {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
+                        </span>
+                      </div>
+
+                      <div className="rounded-2xl overflow-hidden border border-emerald-500/30">
+                        <LiveMap messages={messages.filter(msg => msg.type === 'location')} className="h-56 w-full" />
+                      </div>
+
+                      <a
+                        href={mapsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 biker-btn transition active:scale-98"
+                        title="Canlı Konumu Google Haritalar'da Aç"
+                      >
+                        <Navigation className="w-4 h-4 fill-current" />
+                        <span>Google Haritalar'da Aç & Takip Et</span>
+                        <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                      </a>
                     </div>
                   );
                 }
                 return null;
               })()}
 
-              {/* Location Message */}
+              {/* Static Location Message with Google Maps Integration */}
               {m.type === 'location' && (() => {
                 let loc: LocationData | null = null;
                 try {
@@ -393,7 +419,17 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 if (!loc || loc.lat == null || loc.live) return null;
 
                 return (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 w-full mt-1">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="flex items-center gap-1 text-xs font-bold text-orange-400">
+                        <MapPin className="w-3.5 h-3.5 text-orange-500" />
+                        <span>SABİT KONUM</span>
+                      </span>
+                      <span className="text-[10px] text-zinc-400 font-mono">
+                        {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
+                      </span>
+                    </div>
+
                     <MapPicker location={loc} isLive={false} />
                   </div>
                 );

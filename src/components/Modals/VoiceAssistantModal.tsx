@@ -293,7 +293,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
   return (
     <div 
-      className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 bg-black/85 z-[600] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={handleSafeClose}
     >
       <div 

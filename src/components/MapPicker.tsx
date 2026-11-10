@@ -70,32 +70,47 @@ export const MapPicker: React.FC<MapPickerProps> = ({
     markerRef.current = null;
   }, []);
 
-  const mapsUrl = `https://maps.google.com/?q=${location.lat},${location.lng}`;
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${location.lat},${location.lng}`;
 
   return (
-    <div className={`relative rounded-xl overflow-hidden border border-zinc-700 bg-zinc-900 ${className}`}>
-      <div ref={mapContainerRef} className="w-full h-full min-h-[160px] z-0" />
-      
-      {/* Overlay Information */}
-      <div className="absolute top-2 left-2 z-10 bg-zinc-950/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-zinc-700/60 flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
-        <MapPin className={`w-3.5 h-3.5 ${isLive ? 'text-emerald-400 animate-pulse' : 'text-orange-500'}`} />
-        <span>{isLive ? 'Canlı Konum' : 'Sabit Konum'}</span>
+    <div className="space-y-1.5 w-full">
+      <div className={`relative rounded-2xl overflow-hidden border border-zinc-700 bg-zinc-900 ${className}`}>
+        <div ref={mapContainerRef} className="w-full h-full min-h-[160px] z-0" />
+        
+        {/* Overlay Information */}
+        <div className="absolute top-2 left-2 z-10 bg-zinc-950/85 backdrop-blur-md px-2.5 py-1 rounded-xl border border-zinc-700/60 flex items-center gap-1.5 text-xs font-bold text-zinc-200">
+          <MapPin className={`w-3.5 h-3.5 ${isLive ? 'text-emerald-400 animate-pulse' : 'text-orange-500'}`} />
+          <span>{isLive ? 'Canlı Konum' : 'Sabit Konum'}</span>
+        </div>
+
+        <a
+          href={mapsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={onOpenExternal}
+          className="absolute bottom-2 right-2 z-10 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-1.5 transition active:scale-95 biker-btn"
+          title="Google Haritalar ile Aç"
+        >
+          <Navigation className="w-3.5 h-3.5 fill-current" />
+          <span>Google Haritalar</span>
+        </a>
+
+        <div className="absolute bottom-2 left-2 z-10 bg-zinc-900/90 backdrop-blur-md text-[10px] text-zinc-400 font-mono px-2 py-0.5 rounded-lg border border-zinc-800">
+          {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
+        </div>
       </div>
 
+      {/* Prominent Google Maps Action Button Below */}
       <a
         href={mapsUrl}
         target="_blank"
         rel="noopener noreferrer"
         onClick={onOpenExternal}
-        className="absolute bottom-2 right-2 z-10 bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-1.5 transition active:scale-95"
+        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-orange-600/20 biker-btn transition active:scale-98"
       >
-        <Navigation className="w-3.5 h-3.5" />
-        <span>Haritada Aç</span>
+        <Navigation className="w-4 h-4 fill-current" />
+        <span>Google Haritalar'da Aç & Yol Tarifi Al</span>
       </a>
-
-      <div className="absolute bottom-2 left-2 z-10 bg-zinc-900/90 backdrop-blur-md text-[10px] text-zinc-400 font-mono px-2 py-0.5 rounded border border-zinc-800">
-        {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
-      </div>
     </div>
   );
 };

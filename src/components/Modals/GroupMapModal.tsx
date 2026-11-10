@@ -1,5 +1,4 @@
-import React from 'react';
-import { X, Map as MapIcon, ShieldCheck } from 'lucide-react';
+import { X, Map as MapIcon, ShieldCheck, Navigation } from 'lucide-react';
 import { LiveMap } from '../LiveMap';
 import { Message } from '../../types';
 
@@ -17,7 +16,7 @@ export const GroupMapModal: React.FC<GroupMapModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
+    <div className="fixed inset-0 bg-black/90 z-[600] flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
       <div className="bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="flex justify-between items-center px-4 py-3 border-b border-zinc-800 bg-zinc-950/80 shrink-0">
           <div className="flex items-center gap-2 text-white font-bold">
@@ -37,12 +36,24 @@ export const GroupMapModal: React.FC<GroupMapModalProps> = ({
               </p>
             </div>
           </div>
-          <button 
-            onClick={onClose} 
-            className="w-8 h-8 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white flex items-center justify-center transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="https://www.google.com/maps/search/?api=1&query=40.9568,39.8617"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-1.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition biker-btn active:scale-95"
+              title="Google Haritalar uygulamasında aç"
+            >
+              <Navigation className="w-3.5 h-3.5 fill-current" />
+              <span className="hidden sm:inline">Google Haritalar</span>
+            </a>
+            <button 
+              onClick={onClose} 
+              className="w-8 h-8 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white flex items-center justify-center transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-hidden p-2 bg-zinc-950">
