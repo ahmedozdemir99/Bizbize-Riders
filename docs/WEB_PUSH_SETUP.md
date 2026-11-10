@@ -127,3 +127,13 @@ Fonksiyon adı **push** olmalı. Dağıtımdan sonra fonksiyon ayarlarında plat
 ve worker sırrını kendisi doğrular. Aksi halde anahtarla çağrılan cron worker'ı
 platform tarafından reddedilir. Ardından bu rehberdeki Secrets ve Vault kurulumunu
 tamamlayın. Anahtarlar kurulmadan fonksiyonun `push_not_configured` yanıtı vermesi beklenir.
+
+### Editörde `rapid-task` adıyla oluşturulduysa
+
+Name alanını değiştirmek fonksiyonun URL slug'ını değiştirmez. Uygulama `push`
+adresi bulunamazsa aynı projenin `rapid-task` adresini dener. Vault kurulumunu bu
+gerçek endpoint'e yönlendirmek için:
+
+```sh
+node scripts/push-vault.mjs --project-ref YOUR_PROJECT_REF --function-name rapid-task
+```

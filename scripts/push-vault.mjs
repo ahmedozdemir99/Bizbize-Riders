@@ -8,7 +8,9 @@ const origin=new URL(settings.APP_ORIGIN);
 if(origin.protocol!=='https:'||origin.origin!==settings.APP_ORIGIN||settings.APP_ORIGIN.includes('YOUR_'))throw new Error('Set APP_ORIGIN to your real published HTTPS origin, without a trailing slash.');
 if(!settings.VAPID_SUBJECT||settings.VAPID_SUBJECT.includes('YOUR_'))throw new Error('Set VAPID_SUBJECT to mailto:your-email.');
 const quote=value=>"'"+value.replaceAll("'","''")+"'";
-const values=[['riders_push_url',`https://${ref}.supabase.co/functions/v1/push`],['riders_push_worker_secret',settings.PUSH_WORKER_SECRET]];
+const functionName=process.argv.includes('--function-name')?process.argv[process.argv.indexOf('--function-name')+1]:'push';
+if(!/^[a-zA-Z0-9_-]+$/.test(functionName||''))throw new Error('Invalid function name');
+const values=[['riders_push_url',`https://${ref}.supabase.co/functions/v1/${functionName}`],['riders_push_worker_secret',settings.PUSH_WORKER_SECRET]];
 const sql=values.map(([name,value])=>`do $$ declare existing uuid; begin
 select id into existing from vault.decrypted_secrets where name=${quote(name)} limit 1;
 if existing is null then perform vault.create_secret(${quote(value)},${quote(name)});

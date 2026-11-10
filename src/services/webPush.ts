@@ -1,7 +1,18 @@
 import { getDeviceId, getStoredSupabaseConfig, getSupabaseClient } from './supabase';
 export type PushState = 'off' | 'enabled' | 'blocked' | 'unsupported' | 'install' | 'setup' | 'repair';
 const flag='rider_web_push_enabled';
-const gatewayUrl=()=>getStoredSupabaseConfig().url.replace(/\/$/,'')+'/functions/v1/push';
+const gateways=new Map<string,string>();
+async function fetchGateway(init:RequestInit){
+  const base=getStoredSupabaseConfig().url.replace(/\/$/,'');
+  const names=[...new Set([gateways.get(base)||'push','rapid-task'])];
+  let response:Response|undefined;
+  for(const name of names){
+    response=await fetch(`${base}/functions/v1/${name}`,init);
+    if(response.status===404){const body=await response.clone().json().catch(()=>({}));if(body.code==='NOT_FOUND')continue;}
+    gateways.set(base,name);return response;
+  }
+  return response!;
+}
 export function iosNeedsInstall() {
   const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   return ios && !matchMedia('(display-mode: standalone)').matches && !(navigator as Navigator & {standalone?:boolean}).standalone;
@@ -12,7 +23,7 @@ function decodeKey(value:string) {
   if(bytes.length!==65||bytes[0]!==4)throw new Error('Sunucunun bildirim anahtarı geçersiz.');return bytes;
 }
 async function config() {
-  const response=await fetch(gatewayUrl(),{headers:{apikey:getStoredSupabaseConfig().key},signal:AbortSignal.timeout(10000)});
+  const response=await fetchGateway({headers:{apikey:getStoredSupabaseConfig().key},signal:AbortSignal.timeout(10000)});
   if(!response.ok)throw new Error('Supabase bildirim fonksiyonu henüz kurulmamış veya yapılandırılmamış.');
   const body=await response.json();if(typeof body.publicKey!=='string')throw new Error('Bildirim sunucusu yanıtı geçersiz.');return body;
 }
@@ -20,7 +31,7 @@ async function api(action:string,body:Record<string,unknown>={}) {
   const client=getSupabaseClient();if(!client)throw new Error('Supabase bağlantısı gerekli.');
   const {data,error}=await client.auth.getSession();
   if(error||!data.session)throw new Error('Bildirim oturumu bulunamadı. Bildirimleri tekrar açın.');
-  const response=await fetch(gatewayUrl(),{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${data.session.access_token}`,apikey:getStoredSupabaseConfig().key},body:JSON.stringify({action,...body}),signal:AbortSignal.timeout(15000)});
+  const response=await fetchGateway({method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${data.session.access_token}`,apikey:getStoredSupabaseConfig().key},body:JSON.stringify({action,...body}),signal:AbortSignal.timeout(15000)});
   const result=await response.json();
   if(!response.ok)throw new Error(result.error==='subscription_owned_by_another_user'?'Bu tarayıcı aboneliği eski bir oturuma ait. Bildirimleri kapatıp tekrar açın.':result.error==='authentication_required'?'Bildirim oturumu doğrulanamadı.': 'Bildirim sunucusu işlemi tamamlayamadı. Kurulumu ve bağlantıyı kontrol edin.');
   return result;
