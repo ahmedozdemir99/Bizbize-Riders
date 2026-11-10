@@ -13,8 +13,9 @@
 ## Henüz kurulu olmayanlar
 
 Bu repo bir React web uygulamasıdır; bir Appmint Android/iOS projesi içermez.
-FCM/APNs göndericisi, Web Push abonelik sunucusu ve işletim sistemi arama entegrasyonu
-bu repoda çalışır durumda değildir. Google AI Studio'da web sayfasını paylaşmak
+FCM/APNs göndericisi ve işletim sistemi arama entegrasyonu bu repoda bulunmaz.
+PWA için gerçek Web Push abonelik/gönderim kodu eklendi; [Supabase kurulumunu](WEB_PUSH_SETUP.md)
+tamamlamadan canlı teslimat etkin olmaz. Google AI Studio'da web sayfasını paylaşmak
 ve Chrome kısayolu oluşturmak bunları otomatik kurmaz. Realtime bağlantısı da
 uygulama arka plana alındığında veya telefon kilitlendiğinde açık kalma garantisi vermez.
 

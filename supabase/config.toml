@@ -1,0 +1,5 @@
+project_id = "bizbize-riders"
+
+[functions.push]
+# The handler verifies user JWTs itself; the worker uses its own private secret.
+verify_jwt = false

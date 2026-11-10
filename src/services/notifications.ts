@@ -1,6 +1,6 @@
 import type { CallRecord } from '../types';
 
-export type NotificationIntent = { callId?: string; chatId?: string; action?: 'open' | 'reject' };
+export type NotificationIntent = { callId?: string; groupCallId?: string; chatId?: string; action?: 'open' | 'reject' };
 
 declare global {
   interface Window {
@@ -22,6 +22,7 @@ export async function notifyIncomingCall(call: CallRecord) {
     if (window.BizBizeNotifications) {
       await window.BizBizeNotifications.showIncomingCall({callId:call.id,callerName:call.caller_name,video:call.type==='video',expiresAt}); return;
     }
+    if (localStorage.getItem('rider_web_push_enabled')==='true') return;
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     const title = `Gelen ${call.type === 'video' ? 'görüntülü' : 'sesli'} arama`;
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {

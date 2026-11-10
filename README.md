@@ -111,3 +111,12 @@ npm run test:ios
 
 `test:ios`, WebKit motorunda iPhone görünümü ve MP4 kayıt biçimi için taklit medya
 kullanır. Fiziksel iPhone mikrofon/kamera, Appmint paketi veya kilit ekranı teslimatı testi değildir.
+
+## PWA + Web Push
+
+Gerçek tarayıcı aboneliği, Supabase Edge Function göndericisi ve kalıcı veritabanı
+kuyruğu eklendi. Kurulum ve telefonlarda etkinleştirme:
+[Web Push kurulum rehberi](docs/WEB_PUSH_SETUP.md).
+Kodun yayınlanması Supabase fonksiyonunu/sırlarını kurmaz; kurulum tamamlanmadan
+kilit ekranı teslimatı etkin değildir. Bildirim kimliği doğrulanır; ilk açılışta
+eski sürücü ID’si değişebilir ve kişiler yeni ID ile yeniden eklenmelidir.

@@ -30,6 +30,7 @@ interface ChatRoomProps {
   isDm: boolean;
   messages: Message[];
   currentUserId: string;
+  ownRiderIds?: string[];
   onBack: () => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onClearMessages: () => void;
@@ -55,6 +56,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   isDm,
   messages,
   currentUserId,
+  ownRiderIds = [currentUserId],
   onBack,
   onStartCall,
   onClearMessages,
@@ -238,7 +240,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
         className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0"
       >
         {messages.map((m, idx) => {
-          const isMine = m.sender_id === currentUserId;
+          const isMine = ownRiderIds.includes(m.sender_id);
 
           return (
             <div
@@ -467,7 +469,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 </div>
                 <div className="flex items-center gap-1">
                   {formatTime(m.time || m.created_at)}
-                  {m.sender_id === currentUserId && (
+                  {ownRiderIds.includes(m.sender_id) && (
                     <span className={m.read_by && m.read_by.length > 0 ? 'text-sky-400' : 'text-zinc-500'}>
                       ✓✓
                     </span>

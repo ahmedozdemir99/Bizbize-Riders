@@ -24,8 +24,9 @@ export function initSupabase(customUrl?: string, customKey?: string): SupabaseCl
   try {
     clientInstance = createClient(url, key, {
       auth: {
-        persistSession: false,
-        autoRefreshToken: false,
+        persistSession: true,
+        detectSessionInUrl: false,
+        autoRefreshToken: true,
       },
     });
     return clientInstance;
@@ -117,6 +118,7 @@ CREATE TABLE IF NOT EXISTS public.messages (
   deleted BOOLEAN DEFAULT false
 );
 ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reply_to_id TEXT;
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reply_preview JSONB;
 ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS read_by JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;

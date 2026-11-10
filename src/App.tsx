@@ -17,6 +17,8 @@ import {
 } from './services/supabase';
 import { isMessageForRider } from './services/messageAccess';
 import { notifyIncomingCall, dismissCallNotification, enableNotifications, type NotificationIntent } from './services/notifications';
+import {getOwnRiderIds,syncPushPreferences} from './services/webPush';
+import {NotificationSettingsModal} from './components/Modals/NotificationSettingsModal';
 import { parseBackup } from './services/backup';
 import { GroupCall } from './services/groupCall';
 import { CallConnection, resolveRiderId } from './services/callConnection';
@@ -67,6 +69,7 @@ const DEFAULT_GROUPS: Record<string, { info: CortegeGroup }> = {
 
 export default function App() {
   const deviceId = getDeviceId();
+  const ownRiderIds = getOwnRiderIds();
   const [currentUser, setCurrentUser] = useState<string>(getUsername());
   const [statusText, setStatusText] = useState<string>('Bağlantı denetleniyor');
   const [isOnlineOk, setIsOnlineOk] = useState<boolean>(false);
@@ -138,6 +141,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
 
   // Modals state
+  const [isNotificationsOpen,setIsNotificationsOpen]=useState(false);
   const [isAttachOpen, setIsAttachOpen] = useState<boolean>(false);
   const [isNewGroupOpen, setIsNewGroupOpen] = useState<boolean>(false);
   const [isRidersOpen, setIsRidersOpen] = useState<boolean>(false);
@@ -327,7 +331,7 @@ export default function App() {
       const pending: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
       for (const id of pending) {
         const group = groupsRef.current[id]?.info;
-        if (!group || group.created_by !== deviceId) continue;
+        if (!group || !ownRiderIds.includes(group.created_by || '')) continue;
         const { error } = await client.from('rider_groups').upsert(group);
         if (!groupsRef.current[id]) { await client.from('rider_groups').delete().eq('id',id).eq('created_by',deviceId); continue; }
         if (!error) {
@@ -657,9 +661,10 @@ export default function App() {
         if (replyPreview) payload.reply_preview = replyPreview;
 
         let { error } = await client.from('messages').insert([payload]);
-        if (error?.code === 'PGRST204' && payload.reply_to_id) {
+        if (error?.code === 'PGRST204' && (payload.reply_to_id || payload.reply_preview)) {
           // If the remote table doesn't have reply_to_id column, retry insert without it
           delete payload.reply_to_id;
+          delete payload.reply_preview;
           ({ error } = await client.from('messages').insert([payload]));
         }
         if (error) showToast((unpersistedChats.has(row.group_id) ? 'Mesaj yalnızca bu oturumda tutuluyor; hafıza dolu. Gönderilemedi: ' : 'Mesaj cihazda saklandı, karşı tarafa gönderilemedi: ') + error.message);
@@ -700,13 +705,13 @@ export default function App() {
   const handleDeleteGroup = async (id: string, name: string) => {
     if (id === 'global') return showToast('Ortak Kortej silinemez.');
     const group = groupsRef.current[id]?.info; if (!group) return;
-    const owner = group.created_by === deviceId;
+    const owner = ownRiderIds.includes(group.created_by || '');
     if (!window.confirm(owner ? `"${name}" korteji herkes için silinsin mi?` : `"${name}" korteji listenizden kaldırılsın mı?`)) return;
     const pending: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
     if (owner && !pending.includes(id)) {
       const client = getSupabaseClient();
       if (!client) return showToast('Korteji sunucudan silmek için bağlantı gerekli.');
-      const { error } = await client.from('rider_groups').delete().eq('id', id).eq('created_by', deviceId);
+      const { error } = await client.from('rider_groups').delete().eq('id', id).eq('created_by', group.created_by);
       if (error) return showToast('Kortej silinemedi. Bağlantıyı kontrol edip tekrar deneyin.');
     }
     const deleted = new Set<string>(JSON.parse(localStorage.getItem('rider_deleted_group_ids') || '[]')); deleted.add(id);
@@ -753,6 +758,7 @@ export default function App() {
   };
 
   useEffect(() => () => {
+    callGenerationRef.current++; preparingCallRef.current = false;
     const session = callSessionRef.current;
     callSessionRef.current = null;
     session?.connection.close();
@@ -881,7 +887,7 @@ export default function App() {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
       if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       const call: GroupCallRecord = { id: 'gcall_' + crypto.randomUUID(), title: groupName,
-        host_id: deviceId, host_name: currentUser, type, status: 'active', created_at: new Date().toISOString() };
+        host_id: deviceId, host_name: currentUser, group_id: _groupId, type, status: 'active', created_at: new Date().toISOString() };
       const { error } = await client.from('group_calls').insert(call);
       if (error) throw error;
       if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
@@ -1057,6 +1063,12 @@ export default function App() {
           const {error} = await client.from('calls').update({status:'rejected'}).eq('id',call.id).eq('callee_id',deviceId).eq('status','ringing');
           if (error) showToast('Arama reddedilemedi.'); else { setPendingCall(null); void dismissCallNotification(call.id); }
         } else if (!callSessionRef.current && !groupCallRef.current && !preparingCallRef.current) setPendingCall(call);
+      } else if (intent.groupCallId) {
+        const {data,error}=await client.from('group_calls').select('*').eq('id',intent.groupCallId).limit(1);
+        if(disposed)return;
+        const call=data?.[0] as GroupCallRecord|undefined;
+        if(error||!call||call.status!=='active'||Date.now()-Date.parse(call.created_at)>45000){showToast('Kortej araması sonlanmış veya davetin süresi dolmuş.');return;}
+        if(!callSessionRef.current&&!groupCallRef.current&&!preparingCallRef.current)setPendingGroupCall(call);
       } else if (intent.chatId) {
         const contact = dmContacts[intent.chatId]; const group = groupsRef.current[intent.chatId]?.info;
         if (contact || group) handleOpenChat(intent.chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
@@ -1067,13 +1079,29 @@ export default function App() {
     navigator.serviceWorker?.addEventListener('message',message);
     window.addEventListener('bizbize:notification',native);
     const url = new URL(window.location.href);
-    if (url.searchParams.has('call') || url.searchParams.has('chat')) {
-      void openIntent({callId:url.searchParams.get('call') || undefined,chatId:url.searchParams.get('chat') || undefined,action:url.searchParams.get('action')==='reject'?'reject':'open'});
-      for (const key of ['call','chat','action']) url.searchParams.delete(key);
+    if (url.searchParams.has('call') || url.searchParams.has('groupCall') || url.searchParams.has('chat')) {
+      void openIntent({callId:url.searchParams.get('call') || undefined,groupCallId:url.searchParams.get('groupCall') || undefined,chatId:url.searchParams.get('chat') || undefined,action:url.searchParams.get('action')==='reject'?'reject':'open'});
+      for (const key of ['call','groupCall','chat','action']) url.searchParams.delete(key);
       window.history.replaceState({},'',url);
     }
     return () => { disposed = true; navigator.serviceWorker?.removeEventListener('message',message); window.removeEventListener('bizbize:notification',native); };
   }, [currentUser, deviceId, dmContacts]);
+
+  useEffect(()=>{
+    if(!currentUser)return;
+    const ids: string[]=JSON.parse(localStorage.getItem('rider_push_groups')||'[]');
+    void syncPushPreferences(ids.length?Object.keys(groups):[],[...hiddenRiderIds]).catch(()=>{});
+  },[groups,hiddenRiderIds,currentUser]);
+
+  useEffect(()=>{
+    if(localStorage.getItem('rider_push_identity_notice')==='true'){
+      localStorage.removeItem('rider_push_identity_notice');
+      showToast('Bildirimler açıldı. İki telefonda da profilinizdeki yeni sürücü ID’leriyle birbirinizi ekleyin.',10000);
+    }
+    const changed=(event:MessageEvent)=>{if(event.data?.type==='PUSH_SUBSCRIPTION_CHANGED')showToast('Bildirim aboneliği yenilenmeli. Bildirim Ayarları’ndan tekrar açın.',7000);};
+    navigator.serviceWorker?.addEventListener('message',changed);
+    return()=>navigator.serviceWorker?.removeEventListener('message',changed);
+  },[]);
 
   // Save custom Supabase configuration
   const handleSaveSqlConfig = (url: string, key: string) => {
@@ -1101,7 +1129,7 @@ export default function App() {
               isOnlineOk={isOnlineOk}
               soundEnabled={soundEnabled}
               onToggleSound={() => setSoundEnabled(!soundEnabled)}
-              onOpenPush={async () => { try { showToast(await enableNotifications(), 7000); } catch { showToast('Bildirim izni alınamadı.'); } }}
+              onOpenPush={() => { if (isCallModalOpen || preparingCallRef.current) showToast('Önce mevcut aramayı sonlandırın.'); else setIsNotificationsOpen(true); }}
               onOpenCallHistory={() => setIsCallHistoryOpen(true)}
               onOpenBackup={() => setIsBackupOpen(true)}
               onOpenRiders={() => setIsRidersOpen(true)}
@@ -1134,6 +1162,7 @@ export default function App() {
                 isDm={activeChatId.startsWith('dm_')}
                 messages={messages}
                 currentUserId={deviceId}
+                ownRiderIds={ownRiderIds}
                 onBack={() => setActiveChatId(null)}
                 onStartCall={(type) => {
                   if (activeChatId.startsWith('dm_')) {
@@ -1286,6 +1315,7 @@ export default function App() {
         onError={(msg) => showToast(msg)}
       />
 
+      <NotificationSettingsModal isOpen={isNotificationsOpen} onClose={()=>setIsNotificationsOpen(false)} groupIds={Object.keys(groups)} blockedIds={[...hiddenRiderIds]}/>
       {/* Modals */}
       <NewGroupModal
         isOpen={isNewGroupOpen}
