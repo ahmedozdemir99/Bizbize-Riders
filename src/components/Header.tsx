@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Bike, 
   Bell, 
   Clock, 
   Cloud, 
@@ -12,6 +11,7 @@ import {
   MoreVertical,
   X
 } from 'lucide-react';
+import { MotorcycleIcon } from './MotorcycleIcon';
 
 interface HeaderProps {
   statusText: string;
@@ -65,7 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
         title="Veritabanı Durumu & Ayarları"
       >
         <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center shadow-md border border-white/10 shrink-0">
-          <Bike className="w-5 h-5 text-white" />
+          <MotorcycleIcon className="w-6 h-6 text-white" />
         </div>
         <div className="min-w-0">
           <h1 className="font-display font-bold text-lg sm:text-xl text-white tracking-wide uppercase leading-tight truncate">

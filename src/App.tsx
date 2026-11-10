@@ -39,6 +39,7 @@ import { CallHistoryModal } from './components/Modals/CallHistoryModal';
 import { BackupModal } from './components/Modals/BackupModal';
 import { IncomingCallModal } from './components/Modals/IncomingCallModal';
 import { IncomingGroupCallModal } from './components/Modals/IncomingGroupCallModal';
+import { AddRiderModal } from './components/Modals/AddRiderModal';
 
 const DEFAULT_GROUPS: Record<string, { info: CortegeGroup }> = {
   global: {
@@ -102,6 +103,7 @@ export default function App() {
   const [isCallHistoryOpen, setIsCallHistoryOpen] = useState<boolean>(false);
   const [isBackupOpen, setIsBackupOpen] = useState<boolean>(false);
   const [isSqlModalOpen, setIsSqlModalOpen] = useState<boolean>(false);
+  const [isAddRiderOpen, setIsAddRiderOpen] = useState<boolean>(false);
 
   // Lightbox Media Viewer
   const [mediaViewerState, setMediaViewerState] = useState<{
@@ -111,8 +113,21 @@ export default function App() {
   }>({ url: null, type: null });
 
   // Calls history & incoming calls
-  const [callHistory, setCallHistory] = useState<CallRecord[]>([]);
+  const [callHistory, setCallHistory] = useState<CallRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('rider_call_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [pendingCall, setPendingCall] = useState<CallRecord | null>(null);
+  const [isLiveLocationTracking, setIsLiveLocationTracking] = useState<boolean>(false);
+  const liveLocationTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem('rider_call_history', JSON.stringify(callHistory));
+  }, [callHistory]);
   const [pendingGroupCall, setPendingGroupCall] = useState<GroupCallRecord | null>(null);
 
   // Active WebRTC Call State
@@ -517,6 +532,15 @@ export default function App() {
     showToast('Rider gizlendi.');
   };
 
+  const handleAddRider = (name: string, id: string) => {
+    const dmId = 'dm_' + [deviceId, id].sort().join('_');
+    setDmContacts((prev) => ({
+      ...prev,
+      [dmId]: { id, name },
+    }));
+    showToast(`${name} rehbere eklendi.`);
+  };
+
   const handleRestoreHidden = () => {
     setHiddenRiderIds(new Set());
     showToast('Gizlenen Rider kayıtları geri getirildi.');
@@ -566,18 +590,24 @@ export default function App() {
       const callId = 'call_' + Date.now();
       setActiveCallId(callId);
 
+      const newRecord: CallRecord = {
+        id: callId,
+        caller_id: deviceId,
+        caller_name: currentUser,
+        callee_id: target.id,
+        callee_name: target.name,
+        type,
+        status: 'ringing',
+        created_at: new Date().toISOString(),
+      };
+      setCallHistory((prev) => [newRecord, ...prev]);
+
       const client = getSupabaseClient();
       if (client) {
         try {
           await client.from('calls').insert([
             {
-              id: callId,
-              caller_id: deviceId,
-              caller_name: currentUser,
-              callee_id: target.id,
-              callee_name: target.name,
-              type,
-              status: 'ringing',
+              ...newRecord,
               offer: { type: offer.type, sdp: offer.sdp },
             },
           ]);
@@ -767,6 +797,7 @@ export default function App() {
                 onStartCall={handleStartCall}
                 onHideRider={handleHideRider}
                 onOpenNewGroup={() => setIsNewGroupOpen(true)}
+                onOpenAddRider={() => setIsAddRiderOpen(true)}
               />
             ) : (
               <ChatRoom
@@ -840,23 +871,41 @@ export default function App() {
           );
         }}
         onToggleLiveLocation={() => {
-          if (!navigator.geolocation) return showToast('Konum erişimi yok.');
-          navigator.geolocation.getCurrentPosition(
-            (p) => {
-              const locData = {
-                lat: p.coords.latitude,
-                lng: p.coords.longitude,
-                live: true,
-                at: new Date().toISOString(),
-              };
-              handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
-              setIsAttachOpen(false);
-              showToast('Canlı konum mesajı paylaşıldı!');
-            },
-            () => showToast('Konum alınamadı.')
-          );
+          if (isLiveLocationTracking) {
+            if (liveLocationTimerRef.current) {
+              clearInterval(liveLocationTimerRef.current);
+              liveLocationTimerRef.current = null;
+            }
+            setIsLiveLocationTracking(false);
+            setIsAttachOpen(false);
+            showToast('Canlı konum paylaşımı durduruldu.');
+            return;
+          }
+
+          if (!navigator.geolocation) return showToast('Konum erişimi desteklenmiyor.');
+
+          const sharePosition = () => {
+            navigator.geolocation.getCurrentPosition(
+              (p) => {
+                const locData = {
+                  lat: p.coords.latitude,
+                  lng: p.coords.longitude,
+                  live: true,
+                  at: new Date().toISOString(),
+                };
+                handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
+              },
+              (err) => showToast('Konum güncellenemedi: ' + err.message)
+            );
+          };
+
+          sharePosition();
+          liveLocationTimerRef.current = window.setInterval(sharePosition, 10000);
+          setIsLiveLocationTracking(true);
+          setIsAttachOpen(false);
+          showToast('Canlı konum paylaşılıyor (Her 10 saniyede bir güncellenir).');
         }}
-        isLiveLocationActive={false}
+        isLiveLocationActive={isLiveLocationTracking}
         onSendVoiceNote={(audioUrl) => {
           handleSendMessage('audio', audioUrl, 'Ses Kaydı');
           setIsAttachOpen(false);
@@ -940,6 +989,11 @@ export default function App() {
         isOpen={isSqlModalOpen}
         onClose={() => setIsSqlModalOpen(false)}
         onSaveConfig={handleSaveSqlConfig}
+      />
+      <AddRiderModal
+        isOpen={isAddRiderOpen}
+        onClose={() => setIsAddRiderOpen(false)}
+        onAddRider={handleAddRider}
       />
 
       {/* Toast Notification Banner */}

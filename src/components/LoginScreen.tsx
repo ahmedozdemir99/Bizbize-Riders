@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Bike, Key, Shield, Database } from 'lucide-react';
+import { Key, Shield, Database } from 'lucide-react';
+import { MotorcycleIcon } from './MotorcycleIcon';
 
 interface LoginScreenProps {
   onLogin: (name: string) => void;
@@ -20,12 +21,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onOpenSqlModa
     <section className="flex flex-col h-full w-full items-center justify-center p-6 bg-zinc-950 relative overflow-hidden select-none">
       {/* Background Motorcycle Graphic Accent */}
       <div className="absolute -right-16 -bottom-16 text-zinc-900/40 pointer-events-none">
-        <Bike className="w-[340px] h-[340px]" />
+        <MotorcycleIcon className="w-[340px] h-[340px]" />
       </div>
 
       {/* Main Logo Container */}
       <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center shadow-2xl mb-6 border border-white/20 relative z-10 animate-pulse">
-        <Bike className="w-13 h-13 text-white" />
+        <MotorcycleIcon className="w-14 h-14 text-white" />
       </div>
 
       <h1 className="font-display font-bold text-4xl text-white tracking-wider uppercase mb-2 relative z-10">

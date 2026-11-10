@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, MessageSquare, Phone, Video, UserX, UserPlus, RefreshCw, Users } from 'lucide-react';
+import { X, MessageSquare, Phone, Video, UserPlus, RefreshCw, Users, Trash2 } from 'lucide-react';
 import { UserProfile } from '../../types';
 
 interface RidersDirectoryModalProps {
@@ -71,10 +71,15 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
                 key={u.id}
                 className="flex items-center justify-between p-3 bg-zinc-950 rounded-2xl border border-zinc-800/80 gap-3"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="font-bold text-white truncate text-sm">{u.name || 'Sürücü'}</div>
-                  <div className={`text-[10px] font-semibold ${isOnline ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                    {isOnline ? '● Çevrimiçi' : '○ Çevrimdışı'}
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center text-white text-lg shrink-0 shadow-md">
+                    {u.avatar || '🏍️'}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-white truncate text-sm">{u.name || 'Sürücü'}</div>
+                    <div className={`text-[10px] font-semibold ${isOnline ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                      {isOnline ? '● Çevrimiçi' : '○ Çevrimdışı'}
+                    </div>
                   </div>
                 </div>
 
@@ -84,7 +89,7 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
                       onOpenDmChat(u.id, u.name || 'Rider');
                       onClose();
                     }}
-                    className="px-2.5 py-1.5 bg-sky-700 hover:bg-sky-600 text-white rounded-xl text-xs font-bold flex items-center gap-1 biker-btn"
+                    className="p-2 bg-sky-700 hover:bg-sky-600 text-white rounded-xl text-xs font-bold biker-btn"
                     title="Mesaj"
                   >
                     <MessageSquare className="w-3.5 h-3.5" />
@@ -118,10 +123,10 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
 
                   <button
                     onClick={() => onHideRider(u.id, u.name || 'Rider')}
-                    className="p-2 bg-red-950 hover:bg-red-900 text-red-300 border border-red-900/40 rounded-xl text-xs biker-btn"
-                    title="Bu Cihazdaki Listeden Kaldır"
+                    className="p-2 bg-red-950 hover:bg-red-900 text-red-400 border border-red-900/40 rounded-xl text-xs biker-btn"
+                    title="Sürücüyü Sil / Kaldır"
                   >
-                    <UserX className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>

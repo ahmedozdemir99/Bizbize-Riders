@@ -61,8 +61,8 @@ export function setUsername(name: string): void {
 }
 
 // SQL Schema Generator script for users to setup their Supabase database easily
-export const SUPABASE_SQL_SCHEMA = `-- BizBize Riders Supabase DDL SQL Schema
--- Copy and paste into your Supabase SQL Editor
+export const SUPABASE_SQL_SCHEMA = `-- BizBize Riders Supabase DDL SQL Schema (Tam Güvenli / Tekrar Çalıştırılabilir)
+-- Bu kodu Supabase SQL Editor bölümüne yapıştırıp "Run" butonuna basın.
 
 -- 1. Profiles Table
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all profiles" ON public.profiles;
 CREATE POLICY "Allow public all profiles" ON public.profiles FOR ALL USING (true) WITH CHECK (true);
 
 -- 2. Rider Groups Table
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS public.rider_groups (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.rider_groups ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all rider_groups" ON public.rider_groups;
 CREATE POLICY "Allow public all rider_groups" ON public.rider_groups FOR ALL USING (true) WITH CHECK (true);
 
 -- 3. Group Members Table
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS public.rider_group_members (
   PRIMARY KEY (group_id, user_id)
 );
 ALTER TABLE public.rider_group_members ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all group_members" ON public.rider_group_members;
 CREATE POLICY "Allow public all group_members" ON public.rider_group_members FOR ALL USING (true) WITH CHECK (true);
 
 -- 4. Messages Table
@@ -114,6 +117,7 @@ CREATE TABLE IF NOT EXISTS public.messages (
   deleted BOOLEAN DEFAULT false
 );
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all messages" ON public.messages;
 CREATE POLICY "Allow public all messages" ON public.messages FOR ALL USING (true) WITH CHECK (true);
 
 -- 5. Calls Table
@@ -130,6 +134,7 @@ CREATE TABLE IF NOT EXISTS public.calls (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.calls ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all calls" ON public.calls;
 CREATE POLICY "Allow public all calls" ON public.calls FOR ALL USING (true) WITH CHECK (true);
 
 -- 6. Call Signals Table (WebRTC 1-on-1)
@@ -143,6 +148,7 @@ CREATE TABLE IF NOT EXISTS public.call_signals (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.call_signals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all call_signals" ON public.call_signals;
 CREATE POLICY "Allow public all call_signals" ON public.call_signals FOR ALL USING (true) WITH CHECK (true);
 
 -- 7. Group Calls Table
@@ -156,6 +162,7 @@ CREATE TABLE IF NOT EXISTS public.group_calls (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.group_calls ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all group_calls" ON public.group_calls;
 CREATE POLICY "Allow public all group_calls" ON public.group_calls FOR ALL USING (true) WITH CHECK (true);
 
 -- 8. Group Call Members Table
@@ -168,6 +175,7 @@ CREATE TABLE IF NOT EXISTS public.group_call_members (
   PRIMARY KEY (room_id, user_id)
 );
 ALTER TABLE public.group_call_members ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all group_call_members" ON public.group_call_members;
 CREATE POLICY "Allow public all group_call_members" ON public.group_call_members FOR ALL USING (true) WITH CHECK (true);
 
 -- 9. Group Call Signals Table (WebRTC Multi-Peer)
@@ -181,15 +189,60 @@ CREATE TABLE IF NOT EXISTS public.group_call_signals (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE public.group_call_signals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow public all group_call_signals" ON public.group_call_signals;
 CREATE POLICY "Allow public all group_call_signals" ON public.group_call_signals FOR ALL USING (true) WITH CHECK (true);
 
--- Enable Realtime publication for tables
-ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.calls;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.call_signals;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.group_calls;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.group_call_members;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.group_call_signals;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.rider_groups;
+-- Explicit Grants for Public / Anonymous API access
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, postgres, service_role;
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, postgres, service_role;
+
+-- Safe Realtime Publication Enabler
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.calls;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.call_signals;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.group_calls;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.group_call_members;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.group_call_signals;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.rider_groups;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 `;

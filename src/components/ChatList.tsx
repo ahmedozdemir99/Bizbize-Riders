@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Plus, Trash2, MessageSquare, Video, UserX, Users, Radio } from 'lucide-react';
+import { Search, Plus, Trash2, MessageSquare, Video, UserX, Users, Radio, UserPlus } from 'lucide-react';
 import { CortegeGroup, DirectContact, UserProfile } from '../types';
 
 interface ChatListProps {
@@ -14,6 +14,7 @@ interface ChatListProps {
   onStartCall: (target: { id: string; name: string }, type: 'audio' | 'video') => void;
   onHideRider: (id: string, name: string) => void;
   onOpenNewGroup: () => void;
+  onOpenAddRider: () => void;
 }
 
 export const ChatList: React.FC<ChatListProps> = ({
@@ -28,6 +29,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   onStartCall,
   onHideRider,
   onOpenNewGroup,
+  onOpenAddRider,
 }) => {
   const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
 
@@ -47,15 +49,24 @@ export const ChatList: React.FC<ChatListProps> = ({
     <div className="flex-1 flex flex-col min-h-0 carbon-bg relative">
       {/* Search Input Bar */}
       <div className="p-3 bg-zinc-950/80 border-b border-zinc-900">
-        <div className="rounded-2xl flex items-center px-4 py-2.5 biker-input">
-          <Search className="w-4 h-4 text-zinc-500 shrink-0" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Kortej veya sürücü ara..."
-            className="bg-transparent outline-none text-sm w-full ml-3 text-white placeholder-zinc-500 font-medium"
-          />
+        <div className="flex items-center gap-2">
+          <div className="rounded-2xl flex items-center px-4 py-2.5 biker-input flex-1">
+            <Search className="w-4 h-4 text-zinc-500 shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Kortej veya sürücü ara..."
+              className="bg-transparent outline-none text-sm w-full ml-3 text-white placeholder-zinc-500 font-medium"
+            />
+          </div>
+          <button
+            onClick={onOpenAddRider}
+            className="w-11 h-11 rounded-2xl bg-zinc-900 border border-zinc-800 text-sky-400 flex items-center justify-center biker-btn hover:border-sky-500/50"
+            title="Sürücü Ekle"
+          >
+            <UserPlus className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
@@ -114,17 +125,17 @@ export const ChatList: React.FC<ChatListProps> = ({
           >
             <button
               type="button"
-              onClick={() => onOpenChat(id, d.name || 'Rider', '👤')}
+              onClick={() => onOpenChat(id, d.name || 'Rider', d.avatar || '🏍️')}
               className="text-left flex items-center gap-4 min-w-0 flex-1 bg-transparent"
             >
-              <div className="w-13 h-13 rounded-2xl bg-gradient-to-tr from-sky-700 to-blue-600 flex items-center justify-center text-white text-xl shrink-0 border border-white/10 shadow-md">
-                👤
+              <div className="w-13 h-13 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center text-white text-2xl shrink-0 border border-white/10 shadow-md">
+                {d.avatar || '🏍️'}
               </div>
               <div className="min-w-0">
                 <h3 className="font-display font-bold text-white text-lg truncate">
                   {d.name || 'Rider'}
                 </h3>
-                <p className="text-xs text-sky-400">Birebir Özel Sohbet</p>
+                <p className="text-xs text-orange-400">Sürücü Birebir Sohbet</p>
               </div>
             </button>
 
@@ -132,7 +143,7 @@ export const ChatList: React.FC<ChatListProps> = ({
               type="button"
               onClick={() => onDeleteDm(id, d.name || 'Rider')}
               className="w-9 h-9 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-900/40 shrink-0 flex items-center justify-center biker-btn transition ml-2"
-              title="Kişiyi Listeden Kaldır"
+              title="Kişiyi Sohbet Listesinden Sil"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -162,11 +173,11 @@ export const ChatList: React.FC<ChatListProps> = ({
                   className="w-full flex items-center justify-between p-3.5 hover:bg-zinc-900/60 transition border-b border-zinc-900/40 gap-2"
                 >
                   <button
-                    onClick={() => onOpenChat(dmId, u.name, '👤')}
+                    onClick={() => onOpenChat(dmId, u.name, u.avatar || '🏍️')}
                     className="flex items-center gap-3 min-w-0 flex-1 text-left"
                   >
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shrink-0 shadow-md">
-                      🏍️
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center text-white text-xl shrink-0 shadow-md">
+                      {u.avatar || '🏍️'}
                     </div>
                     <div className="min-w-0">
                       <div className="font-bold text-white text-sm truncate">{u.name}</div>

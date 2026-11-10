@@ -13,6 +13,7 @@ import {
 import { Message, MessageType, LocationData } from '../types';
 import { MapPicker } from './MapPicker';
 import { AudioPlayer } from './AudioPlayer';
+import { LiveMap } from './LiveMap';
 
 interface ChatRoomProps {
   chatName: string;
@@ -152,12 +153,29 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 </div>
               )}
 
-              {/* Text Message */}
+          {/* Text Message */}
               {m.type === 'text' && (
                 <p className="text-[14.5px] font-medium leading-relaxed whitespace-pre-wrap break-words">
                   {m.text || ''}
                 </p>
               )}
+
+              {/* Live Map for Group Members */}
+              {m.type === 'location' && (() => {
+                let loc: LocationData | null = null;
+                try {
+                  loc = JSON.parse(m.url || '{}');
+                } catch {}
+
+                if (loc?.live) {
+                  return (
+                    <div className="mt-2">
+                       <LiveMap messages={messages.filter(msg => msg.type === 'location')} />
+                    </div>
+                  );
+                }
+                return null;
+              })()}
 
               {/* Location Message */}
               {m.type === 'location' && (() => {
@@ -166,13 +184,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                   loc = JSON.parse(m.url || '{}');
                 } catch {}
 
-                if (!loc || loc.lat == null) {
-                  return <p className="text-xs text-red-400">Konum verisi bozuk.</p>;
-                }
+                if (!loc || loc.lat == null || loc.live) return null;
 
                 return (
                   <div className="space-y-2">
-                    <MapPicker location={loc} isLive={loc.live} />
+                    <MapPicker location={loc} isLive={false} />
                   </div>
                 );
               })()}

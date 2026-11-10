@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Bike } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import { CallType } from '../types';
+import { MotorcycleIcon } from './MotorcycleIcon';
 
 interface CallScreenModalProps {
   isOpen: boolean;
@@ -99,7 +100,7 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
       {(callType === 'audio' || (!remoteStream && !isGroupCall)) && (
         <div className="absolute inset-0 flex items-center justify-center flex-col gap-4 bg-gradient-to-b from-zinc-900 via-zinc-950 to-black z-10">
           <div className="w-28 h-28 rounded-3xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center text-5xl text-white shadow-2xl border border-white/20 animate-pulse">
-            <Bike className="w-14 h-14" />
+            <MotorcycleIcon className="w-14 h-14 text-white" />
           </div>
           <div className="font-display text-3xl font-bold text-white tracking-wide uppercase">
             {title || 'Sürücü'}
