@@ -3,7 +3,7 @@ const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const base = process.env.TEST_URL || 'http://localhost:3000';
 const db = { profiles: [], rider_groups: [], messages: [], calls: [], call_signals: [], group_calls: [], group_call_members: [], group_call_signals: [] };
-let seq = 0, delayNextMessages = false, failMessages = false;
+let seq = 0, delayNextMessages = false, failMessages = false, failGroupDeletes = false;
 function matches(row, params) {
   for (const [key, expression] of params) {
     const [op, ...rest] = expression.split('.'); const value = rest.join('.');
@@ -19,6 +19,7 @@ async function mock(route) {
   if (!url.pathname.startsWith('/rest/v1/')) return route.abort();
   const table = url.pathname.split('/').pop(), rows = db[table];
   if (!rows) throw new Error('Unexpected table: ' + table);
+  if (failGroupDeletes && table==='rider_groups' && req.method()==='DELETE') return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'offline'})});
   if (req.method() === 'OPTIONS') return route.fulfill({status:204});
   if (failMessages && table === 'messages') return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'offline'})});
   let result = [];
@@ -36,7 +37,7 @@ async function mock(route) {
       else rows.push({id:String(++seq),created_at:new Date().toISOString(),...item});
     }
   } else if (req.method() === 'PATCH') {
-    for (const row of rows.filter(row=>matches(row,url.searchParams))) Object.assign(row,req.postDataJSON());
+    for (const row of rows.filter(row=>matches(row,url.searchParams))) { Object.assign(row,req.postDataJSON()); result.push({...row}); }
   } else if (req.method() === 'DELETE') db[table]=rows.filter(row=>!matches(row,url.searchParams));
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
 }
@@ -59,7 +60,7 @@ async function waitFor(check,label,timeout=25000) {
      const Original=window.RTCPeerConnection;window.__peers=[];
      window.RTCPeerConnection=new Proxy(Original,{construct(target,args){const pc=new target(...args);window.__peers.push(pc);return pc;}});
    },{id,name});
-   const page=await ctx.newPage();page.on('pageerror',e=>errors.push(e.message));
+   const page=await ctx.newPage();page.on('dialog',dialog=>dialog.accept());page.on('pageerror',e=>errors.push(e.message));
    await page.goto(base);await page.getByTitle('Menü ve Ayarlar').waitFor();
    return page;
  }
@@ -205,11 +206,41 @@ async function waitFor(check,label,timeout=25000) {
  failMessages=false;
  console.log('PASS: delayed reads, consecutive sends, reload, remote reception and offline message retention');
  await a.getByTitle('Geri',{exact:true}).click();await b.getByTitle('Geri',{exact:true}).click();
+ await a.getByTitle('Yeni Kortej Oluştur').click();await a.getByLabel('Kortej Adı',{exact:true}).fill('Kalıcı Test Korteji');
+ await a.getByRole('button',{name:'Kortej Oluştur',exact:true}).click();
+ await a.getByRole('button',{name:/Kalıcı Test Korteji/}).waitFor();
+ const created=db.rider_groups.find(g=>g.name==='Kalıcı Test Korteji');assert(created);
+ await a.reload();await a.getByRole('button',{name:/Kalıcı Test Korteji/}).waitFor();
+ await a.getByTitle('Yeni Kortej Oluştur').click();await a.getByLabel('Kortej Adı',{exact:true}).fill('Kalıcı Test Korteji');
+ await a.getByRole('button',{name:'Kortej Oluştur',exact:true}).click();await a.getByRole('button',{name:'Vazgeç',exact:true}).click();
+ assert.equal(db.rider_groups.filter(g=>g.name==='Kalıcı Test Korteji').length,1);
+ const groupRow=a.getByRole('button',{name:/Kalıcı Test Korteji/}).locator('..');
+ failGroupDeletes=true;await groupRow.getByTitle('Korteji Sil').click();await a.waitForTimeout(100);
+ assert(await a.getByRole('button',{name:/Kalıcı Test Korteji/}).isVisible());
+ failGroupDeletes=false;await groupRow.getByTitle('Korteji Sil').click();
+ await a.getByRole('button',{name:/Kalıcı Test Korteji/}).waitFor({state:'hidden'});assert(!db.rider_groups.some(g=>g.id===created.id));
+ db.rider_groups.push({id:'foreign_group',name:'Diğer Kortej',created_by:'someone_else',avatar:'👥',color:'from-orange-700 to-orange-500'});
+ await a.reload();await a.getByRole('button',{name:/Diğer Kortej/}).waitFor();
+ await a.getByRole('button',{name:/Diğer Kortej/}).locator('..').getByTitle('Korteji Sil').click();
+ assert(db.rider_groups.some(g=>g.id==='foreign_group'));
+ await a.reload();assert.equal(await a.getByRole('button',{name:/Diğer Kortej/}).count(),0);
+ console.log('PASS: group create, duplicates, reload, failed delete, owner delete and non-owner local removal');
  // Add a real contact through the UI.
  await a.getByTitle('Sürücü Ekle',{exact:true}).click();
  await a.getByPlaceholder('Sürücü takma adı...').fill('Bora');assert(await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).isDisabled());await a.getByPlaceholder('Örn: rider_xyz123').fill('rider_b_under_score');
  await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).click();
+ const contactRow=a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).locator('..');
+ await contactRow.getByTitle('Kişiyi Sohbet Listesinden Sil').click();await a.reload();
+ assert.equal(await a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).count(),0);
+ assert(db.profiles.some(profile=>profile.id==='rider_b_under_score'));
+ await a.getByTitle('Sürücü Ekle',{exact:true}).click();
+ await a.getByPlaceholder('Sürücü takma adı...').fill('Kendim');await a.getByPlaceholder('Örn: rider_xyz123').fill('rider_a_under_score');
+ await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).click();assert(await a.getByPlaceholder('Örn: rider_xyz123').isVisible());
+ await a.getByPlaceholder('Sürücü takma adı...').fill('Bora');await a.getByPlaceholder('Örn: rider_xyz123').fill('rider_b_under_score');
+ await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).click();
+ assert.equal(await a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).count(),1);
  await a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).click();
+ console.log('PASS: rider remove, reload, self-add rejection, re-add and remote profile preservation');
  async function mediaReceived(page,video) {
    return page.evaluate(async(video)=> {
      const pc=window.__peers.findLast(pc=>pc.connectionState==='connected');if(!pc)return false;
@@ -217,9 +248,36 @@ async function waitFor(check,label,timeout=25000) {
      return stats.some(s=>s.kind==='audio' && s.bytesReceived>0) && (!video || stats.some(s=>s.kind==='video' && s.bytesReceived>0));
    },video);
  }
+ // Notification intents revalidate the recipient and open the actual incoming-call view.
+ const pushCall={id:'push_fixture',caller_id:'push_caller',caller_name:'Bildirim Sürücüsü',callee_id:'rider_b_under_score',callee_name:'Bora',type:'audio',status:'ringing',created_at:new Date().toISOString()};
+ db.calls.push(pushCall);
+ await b.evaluate(()=>window.dispatchEvent(new CustomEvent('bizbize:notification',{detail:{callId:'push_fixture',action:'open'}})));
+ await b.getByRole('button',{name:'Kabul Et',exact:true}).waitFor({timeout:1500});
+ await b.evaluate(()=>window.dispatchEvent(new CustomEvent('bizbize:notification',{detail:{callId:'push_fixture',action:'reject'}})));
+ await b.getByRole('button',{name:'Kabul Et',exact:true}).waitFor({state:'hidden'});assert.equal(pushCall.status,'rejected');
+ // Permission denial leaves neither an invitation nor an active call.
+ const previousCalls=db.calls.length;
+ await a.evaluate(()=>{window.__callGum=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('Denied','NotAllowedError');};});
+ await a.getByTitle('Sesli Arama',{exact:true}).click();await a.waitForTimeout(100);assert.equal(db.calls.length,previousCalls);
+ // Leaving the app while a permission request is outstanding must invalidate it.
+ await a.evaluate(()=>{navigator.mediaDevices.getUserMedia=async constraints=>{const stream=await window.__callGum(constraints);window.__callPermissionStream=stream;return new Promise(resolve=>window.__releaseCallPermission=()=>resolve(stream));};});
+ await a.getByTitle('Sesli Arama',{exact:true}).click();await a.waitForFunction(()=>!!window.__releaseCallPermission);
+ await a.getByTitle('Menü ve Ayarlar').click();await a.getByRole('button',{name:'Çıkış Yap',exact:true}).click();
+ await a.getByRole('textbox',{name:'Sürücü adın'}).waitFor();await a.evaluate(()=>window.__releaseCallPermission());
+ await a.waitForFunction(()=>window.__callPermissionStream.getTracks().every(track=>track.readyState==='ended'));
+ assert.equal(db.calls.length,previousCalls);
+ await a.evaluate(()=>{navigator.mediaDevices.getUserMedia=window.__callGum;});
+ await a.getByRole('textbox',{name:'Sürücü adın'}).fill('Ali');await a.getByRole('button',{name:'Kontağı Çevir'}).click();
+ await a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).click();
+ console.log('PASS: notification open/reject, denied permission and logout during pending microphone permission');
  for(const video of [false,true]) {
    await a.getByTitle(video?'Görüntülü Arama':'Sesli Arama',{exact:true}).click();
+   if(!video) await b.evaluate(()=>{
+     const original=HTMLMediaElement.prototype.play;let block=true;
+     HTMLMediaElement.prototype.play=function(){if(block&&!this.muted&&this.srcObject){block=false;return Promise.reject(new DOMException('Blocked','NotAllowedError'));}return original.call(this);};
+   });
    await b.getByRole('button',{name:'Kabul Et',exact:true}).click({timeout:20000});
+   if(!video) await b.getByRole('button',{name:'Sesi ve görüntüyü aç',exact:true}).click();
    try {
      await waitFor(async()=>await mediaReceived(a,video)&&await mediaReceived(b,video),'bidirectional '+(video?'video':'audio'));
    } catch(error) {
@@ -231,11 +289,38 @@ async function waitFor(check,label,timeout=25000) {
      console.log('FIXTURE CALL STATUS', db.calls.map(call=>({id:call.id,status:call.status})), 'SIGNALS', db.call_signals.length);
      throw error;
    }
-   for(const page of [a,b]) assert(await page.locator('video').evaluateAll(videos=>videos.some(v=>v.srcObject && !v.muted && !v.paused)),'remote media is playing');
+   await a.getByTitle('Sesi Kapat').click();assert(await a.evaluate(()=>window.__peers.at(-1).getSenders().filter(s=>s.track?.kind==='audio').every(s=>!s.track.enabled)));
+   await a.getByTitle('Sesi Aç').click();
+   if(video){await a.getByTitle('Kamerayı Kapat').click();assert(await a.evaluate(()=>window.__peers.at(-1).getSenders().filter(s=>s.track?.kind==='video').every(s=>!s.track.enabled)));await a.getByTitle('Kamerayı Aç').click();}
+   for(const page of [a,b]) assert(await page.locator('audio,video').evaluateAll(videos=>videos.some(v=>v.srcObject && !v.muted && !v.paused)),'remote media is playing');
+   if(!video) {
+     const c=await rider('rider_c_under_score','Cem');
+     await c.getByTitle('Sürücü Ekle',{exact:true}).click();await c.getByPlaceholder('Sürücü takma adı...').fill('Bora');await c.getByPlaceholder('Örn: rider_xyz123').fill('rider_b_under_score');await c.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).click();
+     await c.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).click();await c.getByTitle('Sesli Arama',{exact:true}).click();
+     await waitFor(()=>db.calls.some(call=>call.caller_id==='rider_c_under_score'&&call.status==='rejected'),'busy rejection');
+     await c.getByTitle('Aramayı Sonlandır').waitFor({state:'hidden'});assert(await mediaReceived(a,false)&&await mediaReceived(b,false));await c.context().close();
+     // Exercise an ICE-restart offer/answer exchange and durable signal replay.
+     await a.evaluate(async()=>{
+       const pc=window.__peers.at(-1);const offer=await pc.createOffer({iceRestart:true});await pc.setLocalDescription(offer);
+       const client=(await import('/src/services/supabase.ts')).getSupabaseClient();
+       const response=await client.from('calls').select('*').eq('caller_id','rider_a_under_score').eq('status','connected').limit(1);const call=response.data[0];
+       await client.from('call_signals').insert({call_id:call.id,from_id:call.caller_id,to_id:call.callee_id,kind:'offer',payload:pc.localDescription.toJSON()});
+     });
+     await a.waitForFunction(()=>window.__peers.at(-1).signalingState==='stable',{timeout:20000});
+     await waitFor(async()=>await mediaReceived(a,false)&&await mediaReceived(b,false),'media after ICE restart');
+     await a.waitForTimeout(3000);assert.equal(db.call_signals.filter(signal=>signal.kind==='answer').length,1,'restart offer must be answered only once');
+     console.log('PASS: busy rider rejection and bidirectional media after ICE restart');
+   }
    await a.getByTitle('Aramayı Sonlandır').click();
    await b.getByTitle('Aramayı Sonlandır').waitFor({state:'hidden',timeout:15000});
    console.log('PASS: bidirectional '+(video?'audio + video':'audio')+' RTP, playback, remote hangup');
  }
+ await a.getByTitle('Sesli Arama',{exact:true}).click();await b.getByRole('button',{name:'Kabul Et',exact:true}).waitFor();
+ await a.evaluate(()=>{window.__realNow=Date.now;Date.now=()=>window.__realNow()+46000;});
+ await a.getByTitle('Aramayı Sonlandır').waitFor({state:'hidden',timeout:10000});
+ await a.evaluate(()=>{Date.now=window.__realNow;});
+ await b.getByRole('button',{name:'Kabul Et',exact:true}).waitFor({state:'hidden',timeout:10000});
+ assert(db.calls.some(call=>call.status==='missed'));console.log('PASS: unanswered call timeout clears both screens');
  await a.getByTitle('Geri',{exact:true}).click();await a.getByRole('button',{name:/Ortak Kortej/}).click();
  await a.getByTitle('Görüntülü Arama',{exact:true}).click();
  await b.getByRole('button',{name:'Katıl',exact:true}).click({timeout:20000});

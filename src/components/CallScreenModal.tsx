@@ -5,7 +5,7 @@ import { MotorcycleIcon } from './MotorcycleIcon';
 
 // Mobile browsers may block unmuted autoplay even after a call was accepted.
 function RemoteMedia({ stream, audioOnly = false }: { stream: MediaStream; audioOnly?: boolean }) {
-  const ref = useRef<HTMLVideoElement>(null);
+  const ref = useRef<HTMLMediaElement | null>(null);
   const [blocked, setBlocked] = useState(false);
   const play = () => {
     const media = ref.current;
@@ -20,7 +20,8 @@ function RemoteMedia({ stream, audioOnly = false }: { stream: MediaStream; audio
     return () => { media.pause(); media.srcObject = null; };
   }, [stream]);
   return <>
-    <video ref={ref} autoPlay playsInline className={audioOnly ? 'absolute w-px h-px opacity-0' : 'w-full h-full object-cover bg-zinc-950'} />
+    {audioOnly ? <audio ref={node => { ref.current = node; }} autoPlay aria-label="Karşı tarafın sesi" />
+      : <video ref={node => { ref.current = node; }} autoPlay playsInline className="w-full h-full object-cover bg-zinc-950" />}
     {blocked && <button onClick={play} className="absolute top-24 left-4 z-40 rounded-xl bg-orange-600 p-3 text-white font-bold">
       Sesi ve görüntüyü aç
     </button>}
@@ -37,6 +38,7 @@ interface CallScreenModalProps {
   remoteStream: MediaStream | null;
   groupRemoteStreams?: Record<string, { name: string; stream: MediaStream }>;
   peerConnection?: RTCPeerConnection | null;
+  connectedAt?: number | null;
   onEndCall: () => void;
 }
 
@@ -50,16 +52,25 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
   remoteStream,
   groupRemoteStreams = {},
   peerConnection = null,
+  connectedAt = null,
   onEndCall,
 }) => {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isOpen || !connectedAt) { setElapsed(0); return; }
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - connectedAt) / 1000)));
+    update(); const timer = window.setInterval(update, 1000); return () => clearInterval(timer);
+  }, [isOpen, connectedAt]);
   const [packetLoss, setPacketLoss] = useState<number>(0);
   const [jitter, setJitter] = useState<number>(0);
   const [rtt, setRtt] = useState<number>(0);
 
   React.useEffect(() => {
     if (!isOpen || !peerConnection) return;
+    let previous = { lost: 0, received: 0 };
+    setPacketLoss(0); setJitter(0); setRtt(0);
     const interval = setInterval(async () => {
       try {
         const stats = await peerConnection.getStats();
@@ -70,17 +81,19 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
 
         stats.forEach((report) => {
           if (report.type === 'inbound-rtp') {
-            if (typeof report.packetsLost === 'number') pktsLost = report.packetsLost;
-            if (typeof report.packetsReceived === 'number') pktsReceived = report.packetsReceived;
-            if (typeof report.jitter === 'number') jit = report.jitter * 1000; // convert to ms
+            if (typeof report.packetsLost === 'number') pktsLost += Math.max(0, report.packetsLost);
+            if (typeof report.packetsReceived === 'number') pktsReceived += report.packetsReceived;
+            if (typeof report.jitter === 'number') jit = Math.max(jit, report.jitter * 1000); // convert to ms
           }
           if (report.type === 'remote-inbound-rtp' && typeof report.roundTripTime === 'number') {
             roundTrip = report.roundTripTime * 1000;
           }
         });
 
-        const total = pktsLost + pktsReceived;
-        const lossPercent = total > 0 ? (pktsLost / total) * 100 : 0;
+        const lost = Math.max(0, pktsLost - previous.lost), received = Math.max(0, pktsReceived - previous.received);
+        const total = lost + received;
+        const lossPercent = total > 0 ? (lost / total) * 100 : 0;
+        previous = { lost: pktsLost, received: pktsReceived };
         setPacketLoss(Number(lossPercent.toFixed(1)));
         setJitter(Number(jit.toFixed(1)));
         setRtt(Number(roundTrip.toFixed(0)));
@@ -156,9 +169,17 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
         </div>
       )}
 
+      <div className="call-status absolute left-4 top-4 z-30 max-w-[55%] rounded-xl bg-black/75 px-3 py-2 text-white text-xs" role="status">
+        <p>{statusText}</p>
+        {connectedAt && <p className="font-mono mt-1">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}</p>}
+        {connectedAt && peerConnection && <p className="mt-1 text-zinc-300" title={`Paket kaybı %${packetLoss}, gecikme ${rtt} ms, titreşim ${jitter} ms`}>
+          {packetLoss > 5 || rtt > 400 || jitter > 50 ? 'Bağlantı zayıf' : 'Bağlantı iyi'}
+        </p>}
+      </div>
+
       {/* Local PIP Video (Selfie / Front-Camera Preview with clear indicator) */}
       {callType === 'video' && localStream && (
-        <div className="absolute right-4 top-4 w-28 h-40 rounded-2xl border-2 border-orange-500 shadow-2xl bg-zinc-900 overflow-hidden z-20 group">
+        <div className="call-preview absolute right-4 top-4 w-28 h-40 rounded-2xl border-2 border-orange-500 shadow-2xl bg-zinc-900 overflow-hidden z-20 group">
           <video
             ref={(node) => {
               if (node && node.srcObject !== localStream) {
@@ -178,7 +199,7 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
       )}
 
       {/* Control Buttons Bar */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 z-30 bg-zinc-900/90 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 shadow-2xl">
+      <div className="call-controls absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 z-30 bg-zinc-900/90 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 shadow-2xl">
         <button
           onClick={toggleMic}
           className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition active:scale-95 ${

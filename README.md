@@ -81,3 +81,33 @@ yerel olarak silinmiş mesajlar, silme tercihine uygun olarak gizli kalır.
 yetkilendirmesinin yerini tutmaz: mevcut SQL şeması anonim erişime açık geliştirme
 politikaları içeriyor. Veritabanı düzeyinde özel mesaj gizliliği için Supabase Auth
 ve kullanıcıya bağlı RLS politikalarına ayrı bir geçiş gerekir.
+
+## Arama, rehber ve paket bildirimleri
+
+Aramalar 45 saniyede yanıtlanmazsa kapanır; iptal edilen mikrofon/kamera isteği
+sonradan arama başlatamaz. Meşgul alıcıya yeni arama mevcut görüşmeyi kesmez.
+Kopmada birebir aramanın başlatıcısı ICE bağlantısını en fazla iki kez yeniden kurmayı dener.
+Arama süresi ve bağlantı durumu ekranda gösterilir; engellenen ses oynatma kullanıcı
+etkileşimiyle açılır. Güvenilir farklı ağ bağlantısı için gerçek TURN hizmeti gerekir.
+
+Sürücü kaldırma yalnızca kendi rehberinizi etkiler, karşı tarafın profilini ve mesaj
+geçmişini silmez. Yeniden eklemek gizlemeyi kaldırır; kendi ID'niz Profil Ayarları'ndan
+kopyalanabilir. Başkasının kortejini kaldırmak yalnızca kendi listenizi değiştirir;
+oluşturduğunuz korteji silme sunucu hatasında başarılı gösterilmez. Çevrimdışı oluşturulan
+kortejler bağlantı geldiğinde yeniden eşitlenir. Bu istemci kuralları sunucu Auth/RLS
+geçişinin yerini tutmaz.
+
+Google AI Studio → Appmint, Android/iOS kilit ekranı bildirimleri ve henüz kurulmamış
+FCM/APNs/backend bileşenleri için [entegrasyon notlarını](docs/APP_STUDIO_APPMINT.md) okuyun.
+Bu sürüm kilit ekranı push teslimatının etkin olduğu anlamına gelmez.
+
+Ek kontroller:
+
+```sh
+npm run test:notifications
+npx playwright install --with-deps webkit
+npm run test:ios
+```
+
+`test:ios`, WebKit motorunda iPhone görünümü ve MP4 kayıt biçimi için taklit medya
+kullanır. Fiziksel iPhone mikrofon/kamera, Appmint paketi veya kilit ekranı teslimatı testi değildir.

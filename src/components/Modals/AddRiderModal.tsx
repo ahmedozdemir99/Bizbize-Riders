@@ -4,7 +4,7 @@ import { X, UserPlus, Hash } from 'lucide-react';
 interface AddRiderModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAddRider: (name: string, id: string) => void;
+  onAddRider: (name: string, id: string) => boolean;
 }
 
 export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, onAddRider }) => {
@@ -17,7 +17,7 @@ export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, o
     e.preventDefault();
     if (name.trim().length >= 2 && riderId.trim()) {
       const finalId = riderId.trim();
-      onAddRider(name.trim(), finalId);
+      if (!onAddRider(name.trim(), finalId)) return;
       setName('');
       setRiderId('');
       onClose();

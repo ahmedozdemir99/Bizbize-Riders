@@ -1,9 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { X, Camera, Upload } from 'lucide-react';
 
 interface ProfileSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  deviceId: string;
   currentName: string;
   currentAvatar: string | null;
   onSave: (name: string, avatar: string | null) => void;
@@ -13,11 +14,14 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
   isOpen,
   onClose,
   currentName,
+  deviceId,
   currentAvatar,
   onSave,
 }) => {
   const [name, setName] = useState(currentName);
   const [avatar, setAvatar] = useState<string | null>(currentAvatar);
+  const [copyText, setCopyText] = useState('ID Kopyala');
+  useEffect(() => { if (isOpen) { setName(currentName); setAvatar(currentAvatar); setCopyText('ID Kopyala'); } }, [isOpen, currentName, currentAvatar]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -72,10 +76,20 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
           </button>
         </div>
 
+        <div className="mb-4 rounded-xl border border-zinc-700 p-3">
+          <label htmlFor="own-rider-id" className="text-xs text-zinc-400">Sürücü ID’niz — arkadaşınız rehberine eklemek için bunu kullanır</label>
+          <input id="own-rider-id" value={deviceId} readOnly className="w-full bg-transparent text-xs text-white mt-2" onFocus={event => event.currentTarget.select()} />
+          <button type="button" className="mt-2 text-orange-400 text-sm" onClick={async () => {
+            try { await navigator.clipboard.writeText(deviceId); setCopyText('Kopyalandı'); }
+            catch { document.getElementById('own-rider-id')?.focus(); setCopyText('ID’yi seçip kopyalayın'); }
+          }}>{copyText}</button>
+        </div>
         <div className="mb-6">
           <label className="block text-zinc-400 text-xs font-bold uppercase mb-2">Görünen İsim</label>
           <input
             type="text"
+            minLength={2}
+            maxLength={40}
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:border-orange-500 outline-none"
@@ -83,11 +97,12 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({
         </div>
 
         <button
+          disabled={name.trim().length < 2}
           onClick={() => {
-            onSave(name, avatar);
+            onSave(name.trim(), avatar);
             onClose();
           }}
-          className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 rounded-xl transition"
+          className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white font-bold py-3 rounded-xl transition"
         >
           Kaydet
         </button>

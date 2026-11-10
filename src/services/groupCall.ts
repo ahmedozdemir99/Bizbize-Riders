@@ -33,7 +33,9 @@ export class GroupCall {
     const { error } = await this.client.from('group_call_members').upsert({ room_id: this.roomId,
       user_id: this.userId, user_name: this.name, joined_at: new Date().toISOString(), left_at: null });
     if (error) throw error;
+    if (this.closed) return;
     await this.poll();
+    if (this.closed) return;
     this.timer = setInterval(() => void this.poll(), 1500);
   }
 
@@ -57,7 +59,8 @@ export class GroupCall {
       // A deterministic offerer avoids two simultaneous offers (glare).
       for (const [id, name] of active) if (this.userId < id && !this.peers.has(id)) {
         const peer = this.peer(id, name);
-        await this.send(id, 'offer', await peer.offer());
+        try { await this.send(id, 'offer', await peer.offer()); }
+        catch (error) { peer.close(); this.peers.delete(id); throw error; }
       }
       const { data: signals, error: signalError } = await this.client.from('group_call_signals').select('*')
         .eq('room_id', this.roomId).eq('to_id', this.userId).order('id');

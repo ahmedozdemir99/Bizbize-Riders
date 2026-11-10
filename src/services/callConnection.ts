@@ -4,6 +4,7 @@ export class CallConnection {
   private pending: RTCIceCandidateInit[] = [];
   private chain: Promise<void> = Promise.resolve();
   private closed = false;
+  private answers = new Map<string, RTCSessionDescriptionInit>();
   private seen = new Set<string>();
 
   constructor(stream: MediaStream, onRemote: (stream: MediaStream) => void,
@@ -19,7 +20,16 @@ export class CallConnection {
     };
     this.pc.onconnectionstatechange = () => onState(this.pc.connectionState);
     this.pc.onicecandidate = event => {
-      if (event.candidate && !this.closed) void sendIce(event.candidate.toJSON()).catch(console.error);
+      if (event.candidate && !this.closed) {
+        const candidate = event.candidate.toJSON();
+        const send = async () => {
+          for (let attempt = 0; attempt < 3 && !this.closed; attempt++) {
+            try { await sendIce(candidate); return; }
+            catch (error) { if (attempt === 2) console.error('ICE delivery:', error); else await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1))); }
+          }
+        };
+        void send();
+      }
     };
   }
 
@@ -46,15 +56,19 @@ export class CallConnection {
     });
   }
 
-  async offer() {
-    await this.pc.setLocalDescription(await this.pc.createOffer());
+  async offer(options?: RTCOfferOptions) {
+    await this.pc.setLocalDescription(await this.pc.createOffer(options));
     return this.pc.localDescription!.toJSON();
   }
 
   async answer(offer: RTCSessionDescriptionInit) {
+    const key = JSON.stringify(offer);
+    if (this.answers.has(key)) return this.answers.get(key)!;
     await this.receive('offer', offer);
     await this.pc.setLocalDescription(await this.pc.createAnswer());
-    return this.pc.localDescription!.toJSON();
+    const answer = this.pc.localDescription!.toJSON();
+    this.answers.set(key, answer);
+    return answer;
   }
 
   close() {

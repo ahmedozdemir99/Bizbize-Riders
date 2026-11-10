@@ -89,3 +89,12 @@
 .leaflet-tile {
   filter: brightness(0.7) invert(1) contrast(1.2) hue-rotate(200deg) saturate(0.3) !important;
 }
+
+/* Standalone iOS / Android webviews: leave room for the notch and home indicator. */
+.app-shell { box-sizing: border-box; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.call-controls { bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)); }
+.call-preview, .call-status { top: calc(1rem + env(safe-area-inset-top, 0px)); }
+@media (max-width: 600px) { input, textarea, select { font-size: 16px; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}

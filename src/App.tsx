@@ -16,6 +16,7 @@ import {
   initSupabase 
 } from './services/supabase';
 import { isMessageForRider } from './services/messageAccess';
+import { notifyIncomingCall, dismissCallNotification, enableNotifications, type NotificationIntent } from './services/notifications';
 import { parseBackup } from './services/backup';
 import { GroupCall } from './services/groupCall';
 import { CallConnection, resolveRiderId } from './services/callConnection';
@@ -132,6 +133,8 @@ export default function App() {
 
   const [onlineRiders, setOnlineRiders] = useState<UserProfile[]>([]);
   const [allRiders, setAllRiders] = useState<UserProfile[]>([]);
+  const groupsRef = useRef(groups); groupsRef.current = groups;
+  const hiddenRidersRef = useRef(hiddenRiderIds); hiddenRidersRef.current = hiddenRiderIds;
   const [messages, setMessages] = useState<Message[]>([]);
 
   // Modals state
@@ -191,8 +194,11 @@ export default function App() {
 
   const groupCallRef = useRef<GroupCall | null>(null);
   const preparingCallRef = useRef(false);
+  const callGenerationRef = useRef(0);
+  const pendingCallRef = useRef(pendingCall); pendingCallRef.current = pendingCall;
+  const [callConnectedAt, setCallConnectedAt] = useState<number | null>(null);
   const dismissedGroupCallsRef = useRef(new Set<string>());
-  const callSessionRef = useRef<{ id: string; peer: string; connection: CallConnection; stream: MediaStream } | null>(null);
+  const callSessionRef = useRef<{ id: string; peer: string; connection: CallConnection; stream: MediaStream; startedAt: number; initiator: boolean; answeredAt?: number; connectedAt?: number; restarts: number; disconnectedAt?: number; signals: Set<string> } | null>(null);
   const activeChatRef = useRef(activeChatId);
   activeChatRef.current = activeChatId;
   const messageLoadRef = useRef(0);
@@ -239,7 +245,7 @@ export default function App() {
     }
 
     const interval = setInterval(() => {
-      if (currentUser) registerPresence(currentUser);
+      if (currentUser) { registerPresence(currentUser); fetchOnlineRiders(); void syncGroupsFromServer(); }
     }, 25000);
 
     return () => clearInterval(interval);
@@ -257,6 +263,9 @@ export default function App() {
           if (soundEnabled) soundEffects.messageChime();
           showToast(`${m.sender_name || 'Rider'}: ${m.text || 'Yeni mesaj'}`);
         }
+      } else if (data.type === 'DELETE_LOCAL_GROUP' && data.payload?.id) {
+        const next = { ...groupsRef.current }; delete next[data.payload.id]; groupsRef.current = next; setGroups(next);
+        if (activeChatRef.current === data.payload.id) { activeChatRef.current = null; setActiveChatId(null); }
       } else if (data.type === 'NEW_LOCAL_GROUP' && data.payload) {
         setGroups((prev) => ({
           ...prev,
@@ -313,35 +322,32 @@ export default function App() {
   };
 
   const syncGroupsFromServer = async () => {
-    const client = getSupabaseClient();
-    if (!client) return;
+    const client = getSupabaseClient(); if (!client) return;
     try {
-      const { data, error } = await client
-        .from('rider_groups')
-        .select('*')
-        .order('created_at', { ascending: true })
-        .limit(300);
-
+      const pending: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
+      for (const id of pending) {
+        const group = groupsRef.current[id]?.info;
+        if (!group || group.created_by !== deviceId) continue;
+        const { error } = await client.from('rider_groups').upsert(group);
+        if (!groupsRef.current[id]) { await client.from('rider_groups').delete().eq('id',id).eq('created_by',deviceId); continue; }
+        if (!error) {
+          const remaining: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
+          localStorage.setItem('rider_pending_groups', JSON.stringify(remaining.filter(key => key !== id)));
+        }
+      }
+      const { data, error } = await client.from('rider_groups').select('*').order('created_at', { ascending: true }).limit(300);
       if (error || !data) return;
-
       const deleted = new Set(JSON.parse(localStorage.getItem('rider_deleted_group_ids') || '[]'));
-      const newGroups: Record<string, { info: CortegeGroup }> = { ...DEFAULT_GROUPS };
-      data.forEach((g: any) => {
-        if (deleted.has(g.id)) return; // Permanently deleted by user, never restore!
-        newGroups[g.id] = {
-          info: {
-            id: g.id,
-            name: g.name || 'Kortej',
-            avatar: g.avatar || '👥',
-            color: g.color || 'from-orange-700 to-orange-500',
-            created_by: g.created_by,
-          },
-        };
-      });
-      setGroups(newGroups);
-    } catch (e) {
-      console.warn('Sync groups offline fallback');
-    }
+      const known = new Set(JSON.parse(localStorage.getItem('rider_synced_group_ids') || '[]'));
+      const pendingNow = new Set(JSON.parse(localStorage.getItem('rider_pending_groups') || '[]'));
+      const next = { ...DEFAULT_GROUPS };
+      for (const [id, group] of Object.entries(groupsRef.current)) {
+        if ((!known.has(id) || pendingNow.has(id)) && !deleted.has(id)) next[id] = group;
+      }
+      for (const group of data) if (!deleted.has(group.id)) next[group.id] = { info: group };
+      localStorage.setItem('rider_synced_group_ids', JSON.stringify(data.map(group => group.id)));
+      groupsRef.current = next; setGroups(next);
+    } catch (error) { console.warn('Group sync:', error); }
   };
 
   const fetchOnlineRiders = async () => {
@@ -357,13 +363,13 @@ export default function App() {
       if (!error && data) {
         const filtered = data.filter(
           (u) =>
-            !hiddenRiderIds.has(String(u.id)) &&
+            !hiddenRidersRef.current.has(String(u.id)) &&
             u.online &&
             u.updated_at &&
             Date.now() - new Date(u.updated_at).getTime() < 70000
         );
         setOnlineRiders(filtered);
-        setAllRiders(data.filter((u) => !hiddenRiderIds.has(String(u.id))));
+        setAllRiders(data.filter((u) => !hiddenRidersRef.current.has(String(u.id))));
       }
     } catch (e) {
       console.warn('Fetch online riders offline fallback');
@@ -404,30 +410,26 @@ export default function App() {
           async (payload: any) => {
             const c: CallRecord = payload.new;
             if (!c) return;
+            if (['ended','rejected','missed'].includes(c.status)) { setPendingCall(prev => prev?.id === c.id ? null : prev); void dismissCallNotification(c.id); }
+            if (c.callee_id === deviceId && c.status === 'ringing' &&
+              (preparingCallRef.current || callSessionRef.current || groupCallRef.current) && callSessionRef.current?.id !== c.id) {
+              await client.from('calls').update({status:'rejected'}).eq('id',c.id).eq('status','ringing'); return;
+            }
 
             // Incoming call for this device
             if (c.callee_id === deviceId && c.status === 'ringing' && !preparingCallRef.current && !callSessionRef.current && !groupCallRef.current) {
               setPendingCall(c);
               if (soundEnabled) soundEffects.ringTone();
-              if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.ready.then((reg) => {
-                  return reg.showNotification(`Gelen ${c.type === 'video' ? 'Görüntülü' : 'Sesli'} Arama`, {
-                    body: `${c.caller_name || 'Bir sürücü'} sizi arıyor...`,
-                    icon: '/logo.png',
-                    data: { url: window.location.href }
-                  } as any);
-                }).catch(() => {});
-              } else if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification(`Gelen Arama: ${c.caller_name || 'Sürücü'}`, { body: 'Sizi arıyor...' });
-              }
+              void notifyIncomingCall(c);
             }
 
             const session = callSessionRef.current;
             if (session && c.id === session.id) {
               if (c.status === 'connected' && c.answer) {
+                session.answeredAt ||= Date.now();
                 await session.connection.receive('answer', c.answer);
-              } else if (c.status === 'rejected' || c.status === 'ended') {
-                handleEndCall();
+              } else if (['rejected','ended','missed'].includes(c.status)) {
+                finishCall(c.status === 'rejected' ? 'rejected' : c.status === 'missed' ? 'missed' : 'ended', false);
               }
             }
           }
@@ -439,7 +441,7 @@ export default function App() {
             const sig = payload.new;
             const session = callSessionRef.current;
             if (!session || !sig || sig.to_id !== deviceId || sig.from_id !== session.peer || sig.call_id !== session.id) return;
-            try { await session.connection.receive(sig.kind, sig.payload); }
+            try { await receiveCallSignal(session,sig); }
             catch (error) { console.warn('Call signaling:', error); }
           }
         )
@@ -460,10 +462,10 @@ export default function App() {
       // Mobile background sleep resilient polling heartbeat (checks every 2.5s)
       const callPollingInterval = window.setInterval(async () => {
         try {
-          const cutoff = new Date(Date.now() - 30000).toISOString();
+          const cutoff = new Date(Date.now() - 45000).toISOString();
 
           // 1. Check for incoming 1-on-1 ringing call
-          const { data: incoming } = await client
+          const { data: incoming, error: incomingError } = await client
             .from('calls')
             .select('*')
             .eq('callee_id', deviceId)
@@ -474,6 +476,7 @@ export default function App() {
 
           if (!preparingCallRef.current && !callSessionRef.current && !groupCallRef.current && incoming && incoming.length > 0) {
             const inc = incoming[0];
+            void notifyIncomingCall(inc);
             setPendingCall((prev) => {
               if (!prev || prev.id !== inc.id) {
                 if (soundEnabled) soundEffects.ringTone();
@@ -483,19 +486,23 @@ export default function App() {
             });
           }
 
+          if (!incomingError && !preparingCallRef.current && !callSessionRef.current && !incoming?.length) setPendingCall(null);
+          if (incoming?.[0] && (callSessionRef.current || groupCallRef.current) && incoming[0].id !== callSessionRef.current?.id) {
+            await client.from('calls').update({status:'rejected'}).eq('id',incoming[0].id).eq('status','ringing');
+          }
+
           // 2. Check for incoming group call
           const { data: gcalls } = await client
             .from('group_calls')
             .select('*')
             .neq('host_id', deviceId)
             .eq('status', 'active')
-            .gte('created_at', cutoff)
             .order('created_at', { ascending: false })
-            .limit(1);
+            .limit(10);
 
           if (!preparingCallRef.current && !callSessionRef.current && !groupCallRef.current && gcalls && gcalls.length > 0) {
-            const gc = gcalls[0];
-            if (dismissedGroupCallsRef.current.has(gc.id)) return;
+            const gc = gcalls.find(call => !dismissedGroupCallsRef.current.has(call.id));
+            if (!gc) { setPendingGroupCall(null); return; }
             setPendingGroupCall((prev) => {
               if (!prev || prev.id !== gc.id) {
                 if (soundEnabled) soundEffects.ringTone();
@@ -512,12 +519,12 @@ export default function App() {
             const { data: stateData } = await client.from('calls').select('*').eq('id', session.id).limit(1);
             if (callSessionRef.current !== session) return;
             const state = stateData?.[0];
-            if (state?.status === 'ended' || state?.status === 'rejected') { handleEndCall(); return; }
-            if (state?.answer) await session.connection.receive('answer', state.answer);
+            if (state && ['ended','rejected','missed'].includes(state.status)) { finishCall(state.status === 'rejected' ? 'rejected' : state.status === 'missed' ? 'missed' : 'ended', false); return; }
+            if (state?.answer) { session.answeredAt ||= Date.now(); await session.connection.receive('answer', state.answer); }
             const { data: signals } = await client.from('call_signals').select('*')
               .eq('call_id', session.id).eq('to_id', deviceId).eq('from_id', session.peer).order('id');
             if (callSessionRef.current !== session) return;
-            for (const signal of signals || []) await session.connection.receive(signal.kind, signal.payload);
+            for (const signal of signals || []) await receiveCallSignal(session,signal);
           }
         } catch {}
       }, 2500);
@@ -663,113 +670,86 @@ export default function App() {
     }
   };
 
-  const handleCreateGroup = async (name: string) => {
-    const id = 'group_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
-    const newRow: CortegeGroup = {
-      id,
-      name,
-      avatar: '👥',
-      color: 'from-orange-700 to-orange-500',
-      created_by: deviceId,
-      created_by_name: currentUser,
-    };
-
-    // Always update local state immediately
-    setGroups((prev) => ({
-      ...prev,
-      [id]: { info: newRow },
-    }));
-    broadcastLocalEvent('NEW_LOCAL_GROUP', newRow);
-
-    const client = getSupabaseClient();
-    if (!client) {
-      showToast('Kortej yerel hafızaya kaydedildi (Sunucu bağlantısı yok).');
-      return;
+  const handleCreateGroup = async (input: string): Promise<boolean> => {
+    const name = input.trim();
+    if (name.length < 2 || name.length > 70) { showToast('Kortej adı 2–70 karakter olmalı.'); return false; }
+    if (Object.values(groupsRef.current).some(group => group.info.name.toLocaleLowerCase('tr') === name.toLocaleLowerCase('tr'))) {
+      showToast('Bu adla bir kortej zaten var.'); return false;
     }
-
+    const id = 'group_' + crypto.randomUUID();
+    const group: CortegeGroup = { id, name, avatar: '👥', color: 'from-orange-700 to-orange-500', created_by: deviceId, created_by_name: currentUser };
+    const next = { ...groupsRef.current, [id]: { info: group } };
+    const pending: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
     try {
-      const { error } = await client.from('rider_groups').insert([newRow]);
-      if (error) {
-        showToast('Kortej yerel hafızaya kaydedildi (Sunucu senkronizasyon uyarısı).');
-        setStatusText('Yerel Mod (Sunucu Çevrimdışı)');
-        setIsOnlineOk(false);
-      } else {
-        showToast('Yeni kortej oluşturuldu ve sunucuya kaydedildi!');
-        setStatusText('Supabase bağlantısı hazır');
-        setIsOnlineOk(true);
+      localStorage.setItem('rider_custom_groups', JSON.stringify(next));
+      localStorage.setItem('rider_pending_groups', JSON.stringify([...new Set([...pending, id])]));
+    } catch { showToast('Cihaz hafızası dolu. Kortej kaydedilemedi.'); return false; }
+    groupsRef.current = next; setGroups(next); broadcastLocalEvent('NEW_LOCAL_GROUP', group);
+    const client = getSupabaseClient();
+    if (client) {
+      const { error } = await client.from('rider_groups').upsert(group);
+      if (!error) {
+        const remaining: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
+        localStorage.setItem('rider_pending_groups', JSON.stringify(remaining.filter(key => key !== id)));
+        showToast('Kortej oluşturuldu.'); return true;
       }
-    } catch (e: any) {
-      showToast('Kortej yerel cihazınıza kaydedildi.');
-      setStatusText('Yerel Mod (Sunucu Çevrimdışı)');
-      setIsOnlineOk(false);
     }
+    showToast('Kortej cihazda kaydedildi. Bağlantı gelince tekrar eşitlenecek.'); return true;
   };
 
   const handleDeleteGroup = async (id: string, name: string) => {
-    if (id === 'global') {
-      showToast('Ortak Kortej silinemez.');
-      return;
+    if (id === 'global') return showToast('Ortak Kortej silinemez.');
+    const group = groupsRef.current[id]?.info; if (!group) return;
+    const owner = group.created_by === deviceId;
+    if (!window.confirm(owner ? `"${name}" korteji herkes için silinsin mi?` : `"${name}" korteji listenizden kaldırılsın mı?`)) return;
+    const pending: string[] = JSON.parse(localStorage.getItem('rider_pending_groups') || '[]');
+    if (owner && !pending.includes(id)) {
+      const client = getSupabaseClient();
+      if (!client) return showToast('Korteji sunucudan silmek için bağlantı gerekli.');
+      const { error } = await client.from('rider_groups').delete().eq('id', id).eq('created_by', deviceId);
+      if (error) return showToast('Kortej silinemedi. Bağlantıyı kontrol edip tekrar deneyin.');
     }
-    if (!window.confirm(`"${name}" korteji kalıcı olarak silinsin mi?`)) return;
-
-    // Permanently record in deletedGroupIds so server sync never restores it
-    setDeletedGroupIds((prev) => {
-      const next = new Set([...prev, id]);
-      localStorage.setItem('rider_deleted_group_ids', JSON.stringify([...next]));
-      return next;
-    });
-
-    setGroups((prev) => {
-      const copy = { ...prev };
-      delete copy[id];
-      return copy;
-    });
-
-    // Also clean up local messages for this group
-    clearLocalMessages(id);
-    localStorage.removeItem(`rider_messages_${id}`);
-
-    if (activeChatId === id) setActiveChatId(null);
-    showToast('Kortej kalıcı olarak silindi.');
-
-    const client = getSupabaseClient();
-    if (client) {
-      try {
-        await client.from('rider_groups').delete().eq('id', id);
-        await client.from('messages').delete().eq('group_id', id);
-      } catch {}
-    }
+    const deleted = new Set<string>(JSON.parse(localStorage.getItem('rider_deleted_group_ids') || '[]')); deleted.add(id);
+    localStorage.setItem('rider_deleted_group_ids', JSON.stringify([...deleted])); setDeletedGroupIds(deleted);
+    localStorage.setItem('rider_pending_groups', JSON.stringify(pending.filter(key => key !== id)));
+    const next = { ...groupsRef.current }; delete next[id]; groupsRef.current = next;
+    localStorage.setItem('rider_custom_groups', JSON.stringify(next)); setGroups(next);
+    clearLocalMessages(id); broadcastLocalEvent('DELETE_LOCAL_GROUP', { id });
+    if (activeChatRef.current === id) { activeChatRef.current = null; setActiveChatId(null); }
+    showToast(owner ? 'Kortej silindi.' : 'Kortej listenizden kaldırıldı.');
   };
 
-  const handleDeleteDm = (id: string, name: string) => {
-    if (!window.confirm(`"${name}" kişi sohbeti listeden kaldırılsın mı?`)) return;
-    setDmContacts((prev) => {
-      const copy = { ...prev };
-      delete copy[id];
-      return copy;
-    });
-    if (activeChatId === id) setActiveChatId(null);
-    showToast('Sohbet listeden kaldırıldı.');
+  const removeRider = (id: string) => {
+    const hidden = new Set(hiddenRidersRef.current); hidden.add(id); hiddenRidersRef.current = hidden;
+    localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden])); setHiddenRiderIds(hidden);
+    setAllRiders(prev => prev.filter(rider => rider.id !== id)); setOnlineRiders(prev => prev.filter(rider => rider.id !== id));
+    const chatId = 'dm_' + [deviceId, id].sort().join('_');
+    setDmContacts(prev => { const next = { ...prev }; delete next[chatId]; localStorage.setItem('rider_dm_contacts', JSON.stringify(next)); return next; });
+    if (activeChatRef.current === chatId) { activeChatRef.current = null; setActiveChatId(null); }
   };
 
+  const handleDeleteDm = (chatId: string, name: string) => {
+    const id = resolveRiderId(chatId, deviceId, dmContacts[chatId]?.id);
+    if (id && window.confirm(`"${name}" sürücüsü rehberinizden kaldırılsın mı? Mesaj geçmişi korunur.`)) { removeRider(id); showToast('Sürücü rehberinizden kaldırıldı.'); }
+  };
   const handleHideRider = (id: string, name: string) => {
-    if (!window.confirm(`"${name}" bu cihazdaki listeden kaldırılsın mı?`)) return;
-    setHiddenRiderIds((prev) => new Set([...prev, id]));
-    showToast('Rider gizlendi.');
+    if (window.confirm(`"${name}" sürücüsü rehberinizden kaldırılsın mı?`)) { removeRider(id); showToast('Sürücü rehberinizden kaldırıldı.'); }
   };
-
-  const handleAddRider = (name: string, id: string) => {
+  const handleAddRider = (inputName: string, inputId: string): boolean => {
+    const name = inputName.trim(), id = inputId.trim();
+    if (name.length < 2 || name.length > 40 || !id || id.length > 200 || id.startsWith('dm_') || /\s/.test(id)) {
+      showToast('Geçerli bir sürücü adı ve profil ID’si girin.'); return false;
+    }
+    if (id === deviceId) { showToast('Kendinizi rehbere ekleyemezsiniz.'); return false; }
     const dmId = 'dm_' + [deviceId, id].sort().join('_');
-    setDmContacts((prev) => ({
-      ...prev,
-      [dmId]: { id, name },
-    }));
-    showToast(`${name} rehbere eklendi.`);
+    const hidden = new Set(hiddenRidersRef.current); hidden.delete(id); hiddenRidersRef.current = hidden;
+    localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden])); setHiddenRiderIds(hidden);
+    setDmContacts(prev => ({ ...prev, [dmId]: { id, name } }));
+    showToast(dmContacts[dmId] ? 'Sürücü bilgisi güncellendi.' : `${name} rehbere eklendi.`); void fetchOnlineRiders(); return true;
   };
-
   const handleRestoreHidden = () => {
-    setHiddenRiderIds(new Set());
-    showToast('Gizlenen Rider kayıtları geri getirildi.');
+    hiddenRidersRef.current = new Set(); setHiddenRiderIds(new Set());
+    localStorage.setItem('rider_hidden_ids', '[]'); void fetchOnlineRiders(); showToast('Gizlenen sürücüler geri getirildi.');
   };
 
   useEffect(() => () => {
@@ -781,20 +761,54 @@ export default function App() {
     groupCallRef.current = null;
   }, []);
 
-  const createCallSession = (id: string, peer: string, stream: MediaStream) => {
+  const receiveCallSignal = async (session: NonNullable<typeof callSessionRef.current>, signal: any) => {
+    if (callSessionRef.current !== session || signal.to_id !== deviceId || signal.from_id !== session.peer || signal.call_id !== session.id) return;
+    const key = String(signal.id || JSON.stringify([signal.kind,signal.payload]));
+    if (session.signals.has(key)) return;
+    session.signals.add(key);
+    try {
+      if (signal.kind === 'offer') {
+        const answer = await session.connection.answer(signal.payload);
+        if (callSessionRef.current !== session) return;
+        const client = getSupabaseClient();
+        if (client) {
+          const {error} = await client.from('call_signals').insert({call_id:session.id,from_id:deviceId,to_id:session.peer,kind:'answer',payload:answer});
+          if (error) throw error;
+        }
+      } else await session.connection.receive(signal.kind,signal.payload);
+    } catch (error) { session.signals.delete(key); throw error; }
+  };
+
+  const createCallSession = (id: string, peer: string, stream: MediaStream, initiator = false) => {
     const client = getSupabaseClient();
     if (!client) throw new Error('Arama için veritabanı bağlantısı gerekli.');
     const connection = new CallConnection(stream, setRemoteStream, state => {
       if (callSessionRef.current?.id !== id) return;
-      if (state === 'connected') setCallStatusText('Bağlandı');
+      if (state === 'connected') {
+        const session = callSessionRef.current!; session.connectedAt ||= Date.now(); session.disconnectedAt = undefined;
+        setCallConnectedAt(session.connectedAt); setCallStatusText('Bağlandı');
+      }
       if (state === 'disconnected') setCallStatusText('Bağlantı yeniden kuruluyor...');
-      if (state === 'failed') setCallStatusText('Bağlantı kurulamadı. Farklı ağlarda TURN sunucusu gerekebilir.');
+      if (state === 'failed' || state === 'disconnected') {
+        const session = callSessionRef.current!;
+        session.disconnectedAt ||= Date.now();
+        if (session.initiator && session.restarts < 2 && session.connectedAt) {
+          session.restarts++;
+          void session.connection.offer({ iceRestart: true }).then(async offer => {
+            if (callSessionRef.current !== session) return;
+            const { error } = await client.from('call_signals').insert({call_id:id,from_id:deviceId,to_id:peer,kind:'offer',payload:offer});
+            if (error) throw error;
+          }).catch(error => console.warn('ICE restart:', error));
+        }
+        if (state === 'failed') setCallStatusText('Bağlantı kurulamadı. Ağ ve arama bağlantı ayarlarını kontrol edin.');
+      }
     }, async candidate => {
       const { error } = await client.from('call_signals').insert({ call_id: id, from_id: deviceId,
         to_id: peer, kind: 'ice', payload: candidate });
       if (error) throw error;
     });
-    callSessionRef.current = { id, peer, connection, stream };
+    callSessionRef.current = { id, peer, connection, stream, startedAt: Date.now(), initiator, restarts: 0, signals: new Set() };
+    setCallConnectedAt(null);
     return connection;
   };
 
@@ -805,14 +819,16 @@ export default function App() {
     if (!targetId) return showToast('Sürücü kimliği bulunamadı. Rehberden tekrar seçin.');
     if (preparingCallRef.current) return;
     preparingCallRef.current = true;
+    const generation = ++callGenerationRef.current;
     let stream: MediaStream | undefined;
     try {
       const client = getSupabaseClient();
       if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true },
         video: type === 'video' ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false });
+      if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       const callId = 'call_' + crypto.randomUUID();
-      const connection = createCallSession(callId, targetId, stream);
+      const connection = createCallSession(callId, targetId, stream, true);
       setLocalStream(stream); setRemoteStream(null); setCallType(type); setCallTitle(target.name);
       setCallStatusText('Aranıyor...'); setIsGroupCall(false); setIsCallModalOpen(true); setActiveCallId(callId);
       const offer = await connection.offer();
@@ -820,11 +836,15 @@ export default function App() {
         callee_id: targetId, callee_name: target.name, type, status: 'ringing', created_at: new Date().toISOString(), offer };
       const { error } = await client.from('calls').insert(record);
       if (error) throw error;
+      if (generation !== callGenerationRef.current) {
+        await client.from('calls').update({status:'ended'}).eq('id',callId); return;
+      }
       setCallHistory(prev => [record, ...prev]);
     } catch (error: any) {
       stream?.getTracks().forEach(track => track.stop());
+      if (generation !== callGenerationRef.current) return;
       handleEndCall(); showToast('Arama başlatılamadı: ' + error.message);
-    } finally { preparingCallRef.current = false; }
+    } finally { if (generation === callGenerationRef.current) preparingCallRef.current = false; }
   };
 
   const openGroupCall = async (call: GroupCallRecord, stream: MediaStream) => {
@@ -841,6 +861,7 @@ export default function App() {
           if (remote) next[id] = { name, stream: remote }; else delete next[id];
           return next;
         });
+        if (remote) { setCallStatusText('Korteje bağlandı'); setCallConnectedAt(prev => prev || Date.now()); }
       }, () => handleEndCall(), error => {
         console.error('Group call:', error); setCallStatusText('Kortej bağlantısı kurulamadı. Veritabanı ayarlarını kontrol edin.');
       });
@@ -852,20 +873,24 @@ export default function App() {
     if (callSessionRef.current || groupCallRef.current) return;
     if (preparingCallRef.current) return;
     preparingCallRef.current = true;
+    const generation = ++callGenerationRef.current;
     let stream: MediaStream | undefined;
     try {
       const client = getSupabaseClient();
       if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+      if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       const call: GroupCallRecord = { id: 'gcall_' + crypto.randomUUID(), title: groupName,
         host_id: deviceId, host_name: currentUser, type, status: 'active', created_at: new Date().toISOString() };
       const { error } = await client.from('group_calls').insert(call);
       if (error) throw error;
+      if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       await openGroupCall(call, stream);
     } catch (error: any) {
       stream?.getTracks().forEach(track => track.stop());
+      if (generation !== callGenerationRef.current) return;
       handleEndCall(); showToast('Grup araması başlatılamadı: ' + error.message);
-    } finally { preparingCallRef.current = false; }
+    } finally { if (generation === callGenerationRef.current) preparingCallRef.current = false; }
   };
 
   const handleJoinGroupCall = async () => {
@@ -873,17 +898,26 @@ export default function App() {
     const call = pendingGroupCall; setPendingGroupCall(null);
     if (preparingCallRef.current) return;
     preparingCallRef.current = true;
+    const generation = ++callGenerationRef.current;
     let stream: MediaStream | undefined;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: call.type === 'video' });
+      if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
+      const client = getSupabaseClient();
+      if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
+      const {data:rooms,error} = await client.from('group_calls').select('*').eq('id',call.id).limit(1);
+      if (error) throw error;
+      if (generation !== callGenerationRef.current || rooms?.[0]?.status !== 'active') throw new Error('Bu kortej araması sonlanmış.');
       await openGroupCall(call, stream);
     } catch (error: any) {
       stream?.getTracks().forEach(track => track.stop());
+      if (generation !== callGenerationRef.current) return;
       handleEndCall(); showToast('Grup aramasına katılınamadı: ' + error.message);
-    } finally { preparingCallRef.current = false; }
+    } finally { if (generation === callGenerationRef.current) preparingCallRef.current = false; }
   };
 
-  const handleEndCall = () => {
+  const finishCall = (status: 'ended' | 'missed' | 'rejected' = 'ended', writeRemote = true) => {
+    callGenerationRef.current++; preparingCallRef.current = false; setCallConnectedAt(null);
     const group = groupCallRef.current;
     if (group) dismissedGroupCallsRef.current.add(group.roomId);
     groupCallRef.current = null;
@@ -894,39 +928,73 @@ export default function App() {
     session?.stream.getTracks().forEach(track => track.stop());
     const client = getSupabaseClient();
     const id = session?.id;
-    if (id && client) void client.from('calls')
-      .update({ status: 'ended' }).eq('id', id).then();
+    if (id && client && writeRemote) void client.from('calls')
+      .update({ status }).eq('id', id).then();
     localStream?.getTracks().forEach(track => track.stop());
     setLocalStream(null); setRemoteStream(null); setGroupRemoteStreams({});
+    if (id) void dismissCallNotification(id);
+    if (id) setCallHistory(prev => prev.map(call => call.id === id ? { ...call, status } : call));
     setIsCallModalOpen(false); setActiveCallId(null); setIsGroupCall(false);
   };
+  const handleEndCall = () => finishCall();
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const session = callSessionRef.current; if (!session) return;
+      if (session.disconnectedAt && Date.now() - session.disconnectedAt > 30000) { finishCall(); showToast('Bağlantı yeniden kurulamadı. Tekrar arayabilirsiniz.'); return; }
+      if (session.connectedAt) return;
+      const deadline = session.answeredAt ? session.answeredAt + 30000 : session.startedAt + 45000;
+      if (Date.now() > deadline) { finishCall('missed'); showToast('Arama yanıtlanmadı veya bağlantı kurulamadı.'); }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingCall || !soundEnabled) return;
+    setCallHistory(previous => previous.some(call => call.id === pendingCall.id) ? previous : [pendingCall, ...previous]);
+    soundEffects.ringTone();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') soundEffects.ringTone(); }, 3000);
+    return () => clearInterval(timer);
+  }, [pendingCall?.id, soundEnabled]);
 
   const handleAcceptIncomingCall = async () => {
     if (!pendingCall || callSessionRef.current) return;
     const call = pendingCall;
+    void dismissCallNotification(call.id);
     setPendingCall(null);
     if (preparingCallRef.current) return;
     preparingCallRef.current = true;
+    const generation = ++callGenerationRef.current;
     let stream: MediaStream | undefined;
     try {
       const client = getSupabaseClient();
       if (!client || !call.offer) throw new Error('Arama teklifi veya veritabanı bağlantısı yok.');
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true },
         video: call.type === 'video' ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false });
+      if (generation !== callGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
+      const { data: latest, error: stateError } = await client.from('calls').select('*').eq('id',call.id).limit(1);
+      if (stateError) throw stateError;
+      if (generation !== callGenerationRef.current || latest?.[0]?.status !== 'ringing') throw new Error('Bu arama artık etkin değil.');
       const connection = createCallSession(call.id, call.caller_id, stream);
       setLocalStream(stream); setRemoteStream(null); setCallType(call.type); setCallTitle(call.caller_name);
       setCallStatusText('Bağlanıyor...'); setIsGroupCall(false); setIsCallModalOpen(true); setActiveCallId(call.id);
       const answer = await connection.answer(call.offer);
-      const { error } = await client.from('calls').update({ status: 'connected', answer }).eq('id', call.id);
+      const { data: accepted, error } = await client.from('calls').update({ status: 'connected', answer }).eq('id', call.id).eq('status','ringing').select('*');
       if (error) throw error;
+      if (!accepted?.length) throw new Error('Arama iptal edilmiş veya süresi dolmuş.');
     } catch (error: any) {
       stream?.getTracks().forEach(track => track.stop());
+      if (generation !== callGenerationRef.current) return;
+      const client = getSupabaseClient();
+      if (client) void client.from('calls').update({status:'rejected'}).eq('id',call.id).eq('status','ringing').then();
       handleEndCall(); showToast('Arama kabul edilemedi: ' + error.message);
-    } finally { preparingCallRef.current = false; }
+    } finally { if (generation === callGenerationRef.current) preparingCallRef.current = false; }
   };
 
   const handleRejectIncomingCall = async () => {
     if (pendingCall) {
+      void dismissCallNotification(pendingCall.id);
+      setCallHistory(prev => prev.map(call => call.id === pendingCall.id ? {...call,status:'rejected'} : call));
       const client = getSupabaseClient();
       if (client) {
         try {
@@ -973,6 +1041,40 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  useEffect(() => {
+    if (!currentUser) return;
+    let disposed = false;
+    const openIntent = async (intent: NotificationIntent) => {
+      const client = getSupabaseClient(); if (!client) return;
+      if (intent.callId) {
+        const {data,error} = await client.from('calls').select('*').eq('id',intent.callId).eq('callee_id',deviceId).limit(1);
+        if (disposed) return;
+        const call = data?.[0] as CallRecord | undefined;
+        if (error || !call || call.status !== 'ringing' || Date.now() - new Date(call.created_at).getTime() > 45000) {
+          showToast('Bu arama sonlanmış veya süresi dolmuş.'); void dismissCallNotification(intent.callId); return;
+        }
+        if (intent.action === 'reject') {
+          const {error} = await client.from('calls').update({status:'rejected'}).eq('id',call.id).eq('callee_id',deviceId).eq('status','ringing');
+          if (error) showToast('Arama reddedilemedi.'); else { setPendingCall(null); void dismissCallNotification(call.id); }
+        } else if (!callSessionRef.current && !groupCallRef.current && !preparingCallRef.current) setPendingCall(call);
+      } else if (intent.chatId) {
+        const contact = dmContacts[intent.chatId]; const group = groupsRef.current[intent.chatId]?.info;
+        if (contact || group) handleOpenChat(intent.chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
+      }
+    };
+    const message = (event: MessageEvent) => { if (event.data?.type === 'NOTIFICATION_INTENT') void openIntent(event.data); };
+    const native = (event: Event) => void openIntent((event as CustomEvent<NotificationIntent>).detail || {});
+    navigator.serviceWorker?.addEventListener('message',message);
+    window.addEventListener('bizbize:notification',native);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('call') || url.searchParams.has('chat')) {
+      void openIntent({callId:url.searchParams.get('call') || undefined,chatId:url.searchParams.get('chat') || undefined,action:url.searchParams.get('action')==='reject'?'reject':'open'});
+      for (const key of ['call','chat','action']) url.searchParams.delete(key);
+      window.history.replaceState({},'',url);
+    }
+    return () => { disposed = true; navigator.serviceWorker?.removeEventListener('message',message); window.removeEventListener('bizbize:notification',native); };
+  }, [currentUser, deviceId, dmContacts]);
+
   // Save custom Supabase configuration
   const handleSaveSqlConfig = (url: string, key: string) => {
     localStorage.setItem('rider_supabase_url', url);
@@ -984,7 +1086,7 @@ export default function App() {
   };
 
   return (
-    <div className="w-full h-dvh flex items-center justify-center bg-black overflow-hidden font-sans select-none">
+    <div className="app-shell w-full h-dvh flex items-center justify-center bg-black overflow-hidden font-sans select-none">
       {/* Mobile Frame Container */}
       <div className="w-full max-w-[480px] h-full flex flex-col bg-zinc-950 relative shadow-2xl border-x border-zinc-800">
         {!currentUser ? (
@@ -999,13 +1101,7 @@ export default function App() {
               isOnlineOk={isOnlineOk}
               soundEnabled={soundEnabled}
               onToggleSound={() => setSoundEnabled(!soundEnabled)}
-              onOpenPush={async () => {
-                if (!('Notification' in window)) return showToast('Bu tarayıcı bildirimleri desteklemiyor.');
-                try {
-                  const permission = await Notification.requestPermission();
-                  showToast(permission === 'granted' ? 'Uygulama açıkken gelen arama bildirimleri etkin.' : 'Bildirim izni verilmedi. Tarayıcı ayarlarından değiştirebilirsiniz.');
-                } catch { showToast('Bildirim izni alınamadı.'); }
-              }}
+              onOpenPush={async () => { try { showToast(await enableNotifications(), 7000); } catch { showToast('Bildirim izni alınamadı.'); } }}
               onOpenCallHistory={() => setIsCallHistoryOpen(true)}
               onOpenBackup={() => setIsBackupOpen(true)}
               onOpenRiders={() => setIsRidersOpen(true)}
@@ -1240,7 +1336,7 @@ export default function App() {
       <IncomingGroupCallModal
         call={pendingGroupCall}
         onJoin={handleJoinGroupCall}
-        onDismiss={() => setPendingGroupCall(null)}
+        onDismiss={() => { if (pendingGroupCall) dismissedGroupCallsRef.current.add(pendingGroupCall.id); setPendingGroupCall(null); }}
       />
 
       <CallScreenModal
@@ -1252,6 +1348,8 @@ export default function App() {
         localStream={localStream}
         remoteStream={remoteStream}
         groupRemoteStreams={groupRemoteStreams}
+        connectedAt={callConnectedAt}
+        peerConnection={callSessionRef.current?.connection.pc}
         onEndCall={handleEndCall}
       />
 
@@ -1275,6 +1373,7 @@ export default function App() {
       <ProfileSettingsModal
         isOpen={isProfileSettingsOpen}
         onClose={() => setIsProfileSettingsOpen(false)}
+        deviceId={deviceId}
         currentName={currentUser}
         currentAvatar={userAvatar}
         onSave={(name, avatar) => {

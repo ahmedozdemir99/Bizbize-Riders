@@ -4,7 +4,7 @@ import { X, Users } from 'lucide-react';
 interface NewGroupModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateGroup: (name: string) => Promise<void>;
+  onCreateGroup: (name: string) => Promise<boolean>;
 }
 
 export const NewGroupModal: React.FC<NewGroupModalProps> = ({ isOpen, onClose, onCreateGroup }) => {
@@ -16,10 +16,10 @@ export const NewGroupModal: React.FC<NewGroupModalProps> = ({ isOpen, onClose, o
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (trimmed.length < 2) return;
+    if (trimmed.length < 2 || loading) return;
     setLoading(true);
     try {
-      await onCreateGroup(trimmed);
+      if (!await onCreateGroup(trimmed)) return;
       setName('');
       onClose();
     } finally {
