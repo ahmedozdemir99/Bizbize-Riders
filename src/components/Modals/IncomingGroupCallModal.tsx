@@ -26,7 +26,7 @@ export const IncomingGroupCallModal: React.FC<IncomingGroupCallModalProps> = ({ 
             {call.title || 'Kortej Görüşmesi'}
           </h3>
           <p className="text-xs text-zinc-400 mt-1">
-            <span className="text-orange-400 font-bold">{call.host_name || 'Bir Rider'}</span> grup görüntülü görüşmesi başlattı.
+            <span className="text-orange-400 font-bold">{call.caller_name || call.host_name || 'Bir Rider'}</span> grup görüntülü görüşmesi başlattı.
           </p>
         </div>
 

@@ -75,10 +75,13 @@ export interface CallRecord {
 export interface GroupCallRecord {
   id: string;
   title: string;
-  host_id: string;
-  host_name: string;
+  group_id?: string;
+  caller_id?: string;
+  caller_name?: string;
+  host_id?: string;
+  host_name?: string;
   type: CallType;
-  status: 'ringing' | 'connected' | 'ended';
+  status: 'active' | 'ringing' | 'connected' | 'ended';
   created_at: string;
 }
 

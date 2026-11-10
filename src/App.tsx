@@ -376,30 +376,157 @@ export default function App() {
         )
         .subscribe();
 
-      // Calls channel
+      // Calls channel (Full WebRTC signaling: 1-on-1 calls, group calls, ICE candidates, and answers)
       const callChannel = client
         .channel(`app-calls-${deviceId}`)
         .on(
           'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'calls' },
-          (payload: any) => {
+          { event: '*', schema: 'public', table: 'calls' },
+          async (payload: any) => {
             const c: CallRecord = payload.new;
+            if (!c) return;
+
+            // Incoming call for this device
             if (c.callee_id === deviceId && c.status === 'ringing') {
               setPendingCall(c);
+              if (soundEnabled) soundEffects.ringTone();
+            }
+
+            // Caller receives answer or rejection
+            if (activeCallId && c.id === activeCallId) {
+              if (c.status === 'connected' && c.answer && peerConnectionRef.current) {
+                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
+                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(c.answer));
+                  setCallStatusText('Bağlandı');
+                }
+              } else if (c.status === 'rejected') {
+                showToast('Arama meşgul / reddedildi.');
+                handleEndCall();
+              } else if (c.status === 'ended') {
+                showToast('Arama sonlandı.');
+                handleEndCall();
+              }
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'call_signals' },
+          async (payload: any) => {
+            const sig = payload.new;
+            if (!sig || sig.to_id !== deviceId) return;
+
+            if (sig.kind === 'ice' && sig.payload && peerConnectionRef.current) {
+              try {
+                await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(sig.payload));
+              } catch {}
+            } else if (sig.kind === 'answer' && sig.payload && peerConnectionRef.current) {
+              try {
+                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
+                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(sig.payload));
+                  setCallStatusText('Bağlandı');
+                }
+              } catch {}
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'group_calls' },
+          (payload: any) => {
+            const gcall: GroupCallRecord = payload.new;
+            const callerId = gcall?.caller_id || gcall?.host_id;
+            if (gcall && callerId !== deviceId && (gcall.status === 'active' || gcall.status === 'ringing')) {
+              setPendingGroupCall(gcall);
               if (soundEnabled) soundEffects.ringTone();
             }
           }
         )
         .subscribe();
 
+      // Mobile background sleep resilient polling heartbeat (checks every 2.5s)
+      const callPollingInterval = window.setInterval(async () => {
+        try {
+          const cutoff = new Date(Date.now() - 30000).toISOString();
+
+          // 1. Check for incoming 1-on-1 ringing call
+          const { data: incoming } = await client
+            .from('calls')
+            .select('*')
+            .eq('callee_id', deviceId)
+            .eq('status', 'ringing')
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (incoming && incoming.length > 0) {
+            const inc = incoming[0];
+            setPendingCall((prev) => {
+              if (!prev || prev.id !== inc.id) {
+                if (soundEnabled) soundEffects.ringTone();
+                return inc;
+              }
+              return prev;
+            });
+          }
+
+          // 2. Check for incoming group call
+          const { data: gcalls } = await client
+            .from('group_calls')
+            .select('*')
+            .neq('caller_id', deviceId)
+            .eq('status', 'active')
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (gcalls && gcalls.length > 0) {
+            const gc = gcalls[0];
+            setPendingGroupCall((prev) => {
+              if (!prev || prev.id !== gc.id) {
+                if (soundEnabled) soundEffects.ringTone();
+                return gc;
+              }
+              return prev;
+            });
+          }
+
+          // 3. If caller waiting for callee to answer
+          if (activeCallId && peerConnectionRef.current) {
+            const { data: stateData } = await client
+              .from('calls')
+              .select('*')
+              .eq('id', activeCallId)
+              .limit(1);
+
+            if (stateData && stateData.length > 0) {
+              const cs = stateData[0];
+              if (cs.status === 'connected' && cs.answer) {
+                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
+                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(cs.answer));
+                  setCallStatusText('Bağlandı');
+                }
+              } else if (cs.status === 'rejected') {
+                showToast('Arama meşgul / reddedildi.');
+                handleEndCall();
+              } else if (cs.status === 'ended' && isCallModalOpen) {
+                showToast('Arama sonlandırıldı.');
+                handleEndCall();
+              }
+            }
+          }
+        } catch {}
+      }, 2500);
+
       return () => {
         client.removeChannel(msgChannel);
         client.removeChannel(callChannel);
+        clearInterval(callPollingInterval);
       };
     } catch {
       console.warn('Realtime subscription offline fallback');
     }
-  }, [currentUser, activeChatId, deviceId, soundEnabled]);
+  }, [currentUser, activeChatId, deviceId, soundEnabled, activeCallId, isCallModalOpen]);
 
   // Load Messages (tries Supabase first, merges/falls back to LocalStore, respects deletions)
   const loadMessages = async (groupId: string) => {
@@ -661,6 +788,13 @@ export default function App() {
       return;
     }
 
+    // Resolve true targetId (in case a dm_ id was passed)
+    let targetId = target.id;
+    if (targetId.startsWith('dm_')) {
+      const parts = targetId.replace('dm_', '').split('_');
+      targetId = parts.find((p) => p !== deviceId) || parts[0];
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -686,6 +820,7 @@ export default function App() {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       });
       peerConnectionRef.current = pc;
@@ -693,24 +828,50 @@ export default function App() {
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
       pc.ontrack = (e) => {
-        if (e.streams[0]) setRemoteStream(e.streams[0]);
+        if (e.streams[0]) {
+          setRemoteStream(e.streams[0]);
+          setCallStatusText('Bağlandı');
+        }
       };
 
       pc.onconnectionstatechange = () => {
-        setCallStatusText(pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          setCallStatusText('Bağlandı');
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          setCallStatusText('Arama sonlandı');
+          setTimeout(() => handleEndCall(), 1500);
+        }
+      };
+
+      const callId = 'call_' + Date.now();
+      setActiveCallId(callId);
+
+      // Exchange ICE candidates through call_signals table
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          const client = getSupabaseClient();
+          if (client) {
+            client.from('call_signals').insert([
+              {
+                call_id: callId,
+                from_id: deviceId,
+                to_id: targetId,
+                kind: 'ice',
+                payload: event.candidate.toJSON(),
+              },
+            ]).then();
+          }
+        }
       };
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const callId = 'call_' + Date.now();
-      setActiveCallId(callId);
-
       const newRecord: CallRecord = {
         id: callId,
         caller_id: deviceId,
         caller_name: currentUser,
-        callee_id: target.id,
+        callee_id: targetId,
         callee_name: target.name,
         type,
         status: 'ringing',
@@ -727,7 +888,9 @@ export default function App() {
               offer: { type: offer.type, sdp: offer.sdp },
             },
           ]);
-        } catch {}
+        } catch (e) {
+          console.warn('Call insert error:', e);
+        }
       }
     } catch (err: any) {
       showToast('Arama başlatılamadı: ' + err.message);
@@ -735,7 +898,87 @@ export default function App() {
     }
   };
 
+  const handleStartGroupCall = async (groupId: string, groupName: string, type: 'audio' | 'video') => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('Arama için kamera/mikrofon ve HTTPS izni gereklidir.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: type === 'video' ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+      });
+
+      setLocalStream(stream);
+      setCallType(type);
+      setCallTitle(`${groupName} (Kortej Telsizi)`);
+      setCallStatusText('Kortej Telsizi Aktif');
+      setIsGroupCall(true);
+      setIsCallModalOpen(true);
+
+      const gcallId = 'gcall_' + Date.now();
+      setActiveCallId(gcallId);
+
+      const client = getSupabaseClient();
+      if (client) {
+        try {
+          await client.from('group_calls').insert([
+            {
+              id: gcallId,
+              title: groupName,
+              group_id: groupId,
+              caller_id: deviceId,
+              caller_name: currentUser,
+              type,
+              status: 'active',
+              created_at: new Date().toISOString(),
+            },
+          ]);
+        } catch {}
+      }
+
+      showToast('Kortej telsiz araması başlatıldı. Sürücüler bağlanabilir.');
+    } catch (err: any) {
+      showToast('Grup araması başlatılamadı: ' + err.message);
+      handleEndCall();
+    }
+  };
+
+  const handleJoinGroupCall = async () => {
+    if (!pendingGroupCall) return;
+    const gcall = pendingGroupCall;
+    setPendingGroupCall(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('Arama için kamera/mikrofon ve HTTPS izni gereklidir.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: gcall.type === 'video' ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
+      });
+
+      setLocalStream(stream);
+      setCallType(gcall.type);
+      setCallTitle(`${gcall.title} (Kortej Telsizi)`);
+      setCallStatusText('Korteje Bağlandı');
+      setIsGroupCall(true);
+      setActiveCallId(gcall.id);
+      setIsCallModalOpen(true);
+      showToast('Kortej telsiz görüşmesine katıldınız.');
+    } catch (err: any) {
+      showToast('Grup aramasına katılınamadı: ' + err.message);
+    }
+  };
+
   const handleEndCall = () => {
+    if (activeCallId) {
+      const client = getSupabaseClient();
+      if (client) {
+        client.from('calls').update({ status: 'ended' }).eq('id', activeCallId).then();
+      }
+    }
     if (localStream) {
       localStream.getTracks().forEach((t) => t.stop());
       setLocalStream(null);
@@ -749,6 +992,7 @@ export default function App() {
     }
     setIsCallModalOpen(false);
     setActiveCallId(null);
+    setIsGroupCall(false);
   };
 
   const handleAcceptIncomingCall = async () => {
@@ -775,16 +1019,51 @@ export default function App() {
       setCallTitle(call.caller_name);
       setCallStatusText('Bağlanıyor...');
       setIsCallModalOpen(true);
+      setActiveCallId(call.id);
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ],
       });
       peerConnectionRef.current = pc;
 
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
       pc.ontrack = (e) => {
-        if (e.streams[0]) setRemoteStream(e.streams[0]);
+        if (e.streams[0]) {
+          setRemoteStream(e.streams[0]);
+          setCallStatusText('Bağlandı');
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          setCallStatusText('Bağlandı');
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          setCallStatusText('Arama sonlandı');
+          setTimeout(() => handleEndCall(), 1500);
+        }
+      };
+
+      // Exchange ICE candidates through call_signals table
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          const client = getSupabaseClient();
+          if (client) {
+            client.from('call_signals').insert([
+              {
+                call_id: call.id,
+                from_id: deviceId,
+                to_id: call.caller_id,
+                kind: 'ice',
+                payload: event.candidate.toJSON(),
+              },
+            ]).then();
+          }
+        }
       };
 
       if (call.offer) {
@@ -799,11 +1078,23 @@ export default function App() {
               .from('calls')
               .update({ status: 'connected', answer: { type: answer.type, sdp: answer.sdp } })
               .eq('id', call.id);
+
+            // Also signal answer explicitly
+            await client.from('call_signals').insert([
+              {
+                call_id: call.id,
+                from_id: deviceId,
+                to_id: call.caller_id,
+                kind: 'answer',
+                payload: { type: answer.type, sdp: answer.sdp },
+              },
+            ]);
           } catch {}
         }
       }
     } catch (e: any) {
       showToast('Arama kabul edilemedi: ' + e.message);
+      handleEndCall();
     }
   };
 
@@ -932,12 +1223,21 @@ export default function App() {
                 messages={messages}
                 currentUserId={deviceId}
                 onBack={() => setActiveChatId(null)}
-                onStartCall={(type) =>
-                  handleStartCall(
-                    { id: activeChatId, name: activeChatName },
-                    type
-                  )
-                }
+                onStartCall={(type) => {
+                  if (activeChatId.startsWith('dm_')) {
+                    let calleeId = dmContacts[activeChatId]?.id;
+                    if (!calleeId) {
+                      const parts = activeChatId.replace('dm_', '').split('_');
+                      calleeId = parts.find((p) => p !== deviceId) || parts[0];
+                    }
+                    handleStartCall(
+                      { id: calleeId, name: activeChatName },
+                      type
+                    );
+                  } else {
+                    handleStartGroupCall(activeChatId, activeChatName, type);
+                  }
+                }}
                 onClearMessages={() => {
                   if (!activeChatId) return;
                   const now = Date.now();
@@ -1179,7 +1479,7 @@ export default function App() {
 
       <IncomingGroupCallModal
         call={pendingGroupCall}
-        onJoin={() => setIsCallModalOpen(true)}
+        onJoin={handleJoinGroupCall}
         onDismiss={() => setPendingGroupCall(null)}
       />
 
