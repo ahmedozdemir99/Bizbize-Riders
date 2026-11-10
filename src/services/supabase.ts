@@ -1,13 +1,22 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-export const DEFAULT_SUPABASE_URL = 'https://iczmxwdhyaicedbbjwzb.supabase.co';
-export const DEFAULT_SUPABASE_KEY = 'sb_publishable_aWRwavolbCP5ShbAWUg-TA_63Pfb8p3';
+export const DEFAULT_SUPABASE_URL = 'https://wvktegtbqlhjeodfrndk.supabase.co';
+export const DEFAULT_SUPABASE_KEY = 'sb_publishable_gLee91X_Oef7ztyeeE_VIQ_Im4U32At';
 
 let clientInstance: SupabaseClient | null = null;
 
 export function getStoredSupabaseConfig(): { url: string; key: string } {
-  const url = localStorage.getItem('rider_supabase_url') || DEFAULT_SUPABASE_URL;
-  const key = localStorage.getItem('rider_supabase_key') || DEFAULT_SUPABASE_KEY;
+  const storedUrl = localStorage.getItem('rider_supabase_url');
+  const storedKey = localStorage.getItem('rider_supabase_key');
+  // Replace only the former bundled defaults, preserving unrelated custom setups.
+  const legacyDefault = storedUrl === 'https://iczmxwdhyaicedbbjwzb.supabase.co'
+    && (!storedKey || storedKey === 'sb_publishable_aWRwavolbCP5ShbAWUg-TA_63Pfb8p3');
+  if (legacyDefault) {
+    localStorage.removeItem('rider_supabase_url');
+    localStorage.removeItem('rider_supabase_key');
+  }
+  const url = legacyDefault ? DEFAULT_SUPABASE_URL : storedUrl || DEFAULT_SUPABASE_URL;
+  const key = legacyDefault ? DEFAULT_SUPABASE_KEY : storedKey || DEFAULT_SUPABASE_KEY;
   return { url, key };
 }
 
