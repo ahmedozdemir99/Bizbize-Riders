@@ -65,3 +65,19 @@ veri göndermez. WebSocket kapalıyken iki ayrı kullanıcı oturumunda gerçek 
 RTP paketlerini, medya oynatmayı, arama sonlandırmayı ve mesaj kalıcılığını denetler.
 Tarayıcı politikası doğrudan WebRTC trafiğini engelliyorsa geliştirme sunucusunu
 bir test TURN sunucusunun `VITE_TURN_*` değerleriyle başlatın.
+
+## Kullanım iyileştirmeleri
+
+GPS izni reddedildiğinde veya sinyal alınamadığında konum mesajı gönderilmez.
+Ekrandan çıkınca konum ve ses kaydı iptal edilir; sonradan tamamlanan izin
+istekleri eski sohbete mesaj gönderemez. Radar her sürücünün yalnızca son
+konumunu kullanır; iki dakikadan eski canlı konumlar radardan kaldırılır.
+
+Yedekler cihazda bulunan tüm sohbetleri kapsar. Geri yükleme kayıtları mevcut
+geçmişle birleştirir; diğer cihazlara yeniden mesaj göndermez. Bir sohbette
+yerel olarak silinmiş mesajlar, silme tercihine uygun olarak gizli kalır.
+
+İlgisiz birebir mesajlar bildirimlerde gösterilmez. Bu istemci filtresi sunucu
+yetkilendirmesinin yerini tutmaz: mevcut SQL şeması anonim erişime açık geliştirme
+politikaları içeriyor. Veritabanı düzeyinde özel mesaj gizliliği için Supabase Auth
+ve kullanıcıya bağlı RLS politikalarına ayrı bir geçiş gerekir.

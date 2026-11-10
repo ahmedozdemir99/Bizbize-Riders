@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
+import React, { useRef } from 'react';
 import { 
   X, 
   Camera, 
@@ -33,77 +34,11 @@ export const AttachMenuDrawer: React.FC<AttachMenuDrawerProps> = ({
   onSendVoiceNote,
   onError,
 }) => {
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<number | null>(null);
-
+  const { isRecording, seconds: recordingSeconds, start: startRecording, stop: stopRecording } =
+    useVoiceRecorder(isOpen, onSendVoiceNote, onError);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
-
   if (!isOpen) return null;
-
-  const startRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      onError('Ses kaydı için mikrofon izni gereklidir.');
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        stream.getTracks().forEach((t) => t.stop());
-
-        if (blob.size > 2 * 1024 * 1024) {
-          onError('Ses kaydı 2 MB sınırını aşıyor. Lütfen daha kısa tutun.');
-          return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (reader.result) {
-            onSendVoiceNote(String(reader.result));
-          }
-        };
-        reader.readAsDataURL(blob);
-
-        setIsRecording(false);
-        setRecordingSeconds(0);
-        if (timerRef.current) clearInterval(timerRef.current);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-      setRecordingSeconds(0);
-
-      timerRef.current = window.setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch (err: any) {
-      onError('Mikrofon açılamadı: ' + (err?.message || 'İzin gerekli'));
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-  };
 
   const formatTimer = (sec: number) => {
     const m = Math.floor(sec / 60);

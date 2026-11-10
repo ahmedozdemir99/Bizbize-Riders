@@ -86,6 +86,16 @@ async function waitFor(check,label,timeout=25000) {
      if (call.pc.added.length !== 1) throw Error('ICE was lost or duplicated');
      call.close();
    } finally { window.RTCPeerConnection = Original; }
+   const { latestLiveLocations, escapeMapText } = await import('/src/services/location.ts');
+   const now=Date.now();
+   const point=(sender,time,lat=41)=>({group_id:'global',sender_id:sender,sender_name:sender,type:'location',time,url:JSON.stringify({lat,lng:29,live:true})});
+   const points=latestLiveLocations([point('a',now-1000),point('a',now),point('b',now-180000),point('c',now,999)],now);
+   if(points.length!==1 || points[0].time!==now) throw Error('Radar repeats stale or invalid locations');
+   const tag=document.createElement('div');tag.innerHTML=escapeMapText('<img src=x onerror=alert(1)>');
+   if(tag.children.length || !tag.textContent.includes('<img')) throw Error('Map name rendered as HTML');
+   const { isMessageForRider } = await import('/src/services/messageAccess.ts');
+   if (isMessageForRider({group_id:'dm_other_third',sender_id:'other',recipient_id:'third'},'rider_a_under_score')) throw Error('Unrelated DM leaked');
+   if (!isMessageForRider({group_id:'dm_rider_a_under_score_rider_b_under_score',sender_id:'rider_b_under_score'},'rider_a_under_score')) throw Error('Legacy DM blocked');
    const local = await import('/src/services/localStore.ts');
    const originalSet = Storage.prototype.setItem;
    try {
@@ -101,6 +111,81 @@ async function waitFor(check,label,timeout=25000) {
  assert(checks);
  console.log('PASS: early ICE queue, replay deduplication, underscore rider IDs and storage quota fallback');
  await a.getByRole('button',{name:/Ortak Kortej/}).click();
+ // GPS denial must never fabricate a rider's position.
+ await a.evaluate(()=>{ navigator.geolocation.getCurrentPosition = (_ok, error) => error({code:1,message:'denied'}); });
+ await a.getByTitle('Medya / Konum / Ek Ekle').click();
+ await a.getByRole('button',{name:'Sabit Konum',exact:true}).click();
+ await a.waitForTimeout(100);
+ assert.equal(db.messages.filter(m=>m.type==='location').length,0);
+ await a.getByRole('button',{name:'Canlı Konum',exact:true}).click();
+ await a.waitForTimeout(100);
+ assert.equal(db.messages.filter(m=>m.type==='location').length,0);
+ // A delayed GPS result after leaving the chat must be discarded.
+ await a.evaluate(()=>{navigator.geolocation.getCurrentPosition = ok => {window.__latePosition=ok;};});
+ await a.getByTitle('Medya / Konum / Ek Ekle').click();
+ await a.getByRole('button',{name:'Canlı Konum',exact:true}).click();
+ await a.getByTitle('Geri',{exact:true}).click();
+ await a.evaluate(()=>window.__latePosition({coords:{latitude:41,longitude:29}}));
+ await a.waitForTimeout(100);assert.equal(db.messages.filter(m=>m.type==='location').length,0);
+ // Microphone permission completing after the chat closed must release all tracks.
+ await a.getByRole('button',{name:/Ortak Kortej/}).click();
+ await a.evaluate(()=>{
+   window.__originalGum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+   navigator.mediaDevices.getUserMedia = async constraints => {
+     const stream = await window.__originalGum(constraints);window.__lateMicStream=stream;
+     return new Promise(resolve=>{window.__releaseMic=()=>resolve(stream);});
+   };
+ });
+ await a.getByTitle('Sesli Telsiz Kaydı Başlat').click();
+ await a.waitForFunction(()=>!!window.__releaseMic);
+ await a.getByTitle('Geri',{exact:true}).click();
+ await a.evaluate(()=>window.__releaseMic());
+ await a.waitForFunction(()=>window.__lateMicStream.getTracks().every(t=>t.readyState==='ended'));
+ assert.equal(db.messages.filter(m=>m.type==='audio').length,0);
+ await a.evaluate(()=>{navigator.mediaDevices.getUserMedia = window.__originalGum;});
+ await a.getByRole('button',{name:/Ortak Kortej/}).click();
+ // Closing the attachments drawer cancels an active recording without sending it.
+ await a.getByTitle('Medya / Konum / Ek Ekle').click();
+ await a.getByRole('button',{name:'SES KAYDI BAŞLAT',exact:true}).click();
+ await a.getByText(/Kayıt Yapılıyor:/).waitFor();
+ await a.getByText('Kapat / Geri',{exact:true}).click();
+ await a.waitForTimeout(100);assert.equal(db.messages.filter(m=>m.type==='audio').length,0);
+ // A normal recording still sends a correctly labelled media payload.
+ await a.getByTitle('Sesli Telsiz Kaydı Başlat').click();
+ await a.getByText('Sesli Telsiz Kaydediliyor...').waitFor();
+ await a.waitForTimeout(500);
+ await a.getByRole('button',{name:'Bitir & Gönder',exact:true}).click();
+ await waitFor(()=>db.messages.some(m=>m.type==='audio'),'voice note saved');
+ assert.match(db.messages.find(m=>m.type==='audio').url,/^data:audio\/(webm|mp4|ogg)/);
+ // Import both a current chat and an archived chat, then export all local history.
+ const backup={app:'BizBize Riders',version:2,customGroups:{archive:{info:{id:'archive',name:'Arşiv Korteji',avatar:'🏍️',color:'from-orange-700 to-orange-500'}}},dmContacts:{},messages:[
+   {group_id:'global',sender_id:'backup_rider',sender_name:'Yedek',time:1,type:'text',text:'Geri yüklenen mesaj'},
+   {group_id:'archive',sender_id:'backup_rider',sender_name:'Yedek',time:2,type:'text',text:'Arşiv geçmişi'}]};
+ await a.getByTitle('Menü ve Ayarlar').click();await a.getByRole('button',{name:'Yedekleme & Geri Yükle'}).click();
+ await a.locator('input[type=file][accept=".json,application/json"]').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+ await a.getByText('Geri yüklenen mesaj',{exact:true}).waitFor();
+ await a.getByTitle('Menü ve Ayarlar').click();await a.getByRole('button',{name:'Yedekleme & Geri Yükle'}).click();
+ const downloadPromise=a.waitForEvent('download');await a.getByRole('button',{name:'Yedek İndir (.JSON)',exact:true}).click();
+ const download=await downloadPromise;const stream=await download.createReadStream();const chunks=[];for await(const chunk of stream)chunks.push(chunk);
+ const exported=JSON.parse(Buffer.concat(chunks).toString());
+ assert(exported.messages.some(m=>m.text==='Arşiv geçmişi'));assert(exported.messages.some(m=>m.text==='Geri yüklenen mesaj'));
+ // Close the backup dialog by its close icon.
+ await a.locator('div.fixed').filter({has:a.getByText('YEDEKLEME & GERİ YÜKLE',{exact:true})}).locator('button').first().click();
+ await a.evaluate(()=>{
+   const channel=new BroadcastChannel('bizbize_riders_local_channel');
+   channel.postMessage({type:'NEW_LOCAL_MESSAGE',payload:{group_id:'dm_other_third',sender_id:'other',recipient_id:'third',sender_name:'Other',type:'text',text:'Başkasının özel mesajı',time:Date.now()}});
+   setTimeout(()=>channel.close(),100);
+ });
+ await a.waitForTimeout(150);assert.equal(await a.getByText(/Başkasının özel mesajı/).count(),0);
+ console.log('PASS: unrelated direct messages do not produce notifications');
+ console.log('PASS: GPS denial, late location/microphone callbacks, recording cleanup and backup round trip');
+ // Polling must preserve the scroll position while reading older messages.
+ for(let i=0;i<35;i++) db.messages.push({id:String(++seq),group_id:'global',sender_id:'reader_fixture',sender_name:'Geçmiş',time:Date.now()+i,type:'text',text:'Okuma '+i});
+ await a.getByText('Okuma 0',{exact:true}).waitFor({state:'attached'});
+ const feed=a.getByRole('log',{name:'Sohbet mesajları'});
+ await feed.evaluate(element=>{element.scrollTop=0;element.dispatchEvent(new Event('scroll'));});
+ await a.waitForTimeout(4500);assert(await feed.evaluate(element=>element.scrollTop<5),'history scroll preserved');
+ console.log('PASS: history scroll survives background refresh');
  // An old empty response arrives after two newer sends.
  delayNextMessages=true;
  await a.evaluate(()=>import('/src/services/supabase.ts').then(m=>m.getSupabaseClient().from('messages').select('*'))); // fixture delay probe
@@ -122,7 +207,7 @@ async function waitFor(check,label,timeout=25000) {
  await a.getByTitle('Geri',{exact:true}).click();await b.getByTitle('Geri',{exact:true}).click();
  // Add a real contact through the UI.
  await a.getByTitle('Sürücü Ekle',{exact:true}).click();
- await a.getByPlaceholder('Sürücü takma adı...').fill('Bora');await a.getByPlaceholder('Örn: rider_xyz123').fill('rider_b_under_score');
+ await a.getByPlaceholder('Sürücü takma adı...').fill('Bora');assert(await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).isDisabled());await a.getByPlaceholder('Örn: rider_xyz123').fill('rider_b_under_score');
  await a.getByRole('button',{name:'Sürücüyü Ekle',exact:true}).click();
  await a.getByRole('button',{name:/Bora.*Sürücü Birebir Sohbet/}).click();
  async function mediaReceived(page,video) {

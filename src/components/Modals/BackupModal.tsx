@@ -42,7 +42,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
         </div>
 
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Uygulamadaki tüm kortej odalarınızı, rehberdeki sürücüleri ve mesaj geçmişinizi JSON dosyası olarak bilgisayarınıza veya telefonunuza yedekleyebilirsiniz.
+          Cihazda saklanan kortejleri, rehberinizi ve sohbet geçmişinizi JSON olarak yedekleyebilirsiniz. Geri yükleme mevcut mesajlarla birleştirir; sunucuya mesaj göndermez.
         </p>
 
         <div className="space-y-3 pt-2">

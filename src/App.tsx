@@ -15,12 +15,15 @@ import {
   setUsername, 
   initSupabase 
 } from './services/supabase';
+import { isMessageForRider } from './services/messageAccess';
+import { parseBackup } from './services/backup';
 import { GroupCall } from './services/groupCall';
 import { CallConnection, resolveRiderId } from './services/callConnection';
 import { soundEffects } from './services/sound';
 import { 
   mergeMessages,
   unpersistedChats,
+  getAllLocalMessages,
   getLocalMessages, 
   saveLocalMessage, 
   updateLocalMessages,
@@ -163,6 +166,7 @@ export default function App() {
   });
   const [pendingCall, setPendingCall] = useState<CallRecord | null>(null);
   const [isLiveLocationTracking, setIsLiveLocationTracking] = useState<boolean>(false);
+  const locationGenerationRef = useRef(0);
   const liveLocationTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -209,6 +213,7 @@ export default function App() {
   useEffect(() => {
     setIsLiveLocationTracking(false);
     return () => {
+      locationGenerationRef.current++;
       if (liveLocationTimerRef.current !== null) {
         clearInterval(liveLocationTimerRef.current);
         liveLocationTimerRef.current = null;
@@ -230,9 +235,7 @@ export default function App() {
       syncGroupsFromServer();
       fetchOnlineRiders();
 
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
+
     }
 
     const interval = setInterval(() => {
@@ -247,6 +250,7 @@ export default function App() {
     const unsubscribe = subscribeLocalBroadcast((data) => {
       if (data.type === 'NEW_LOCAL_MESSAGE' && data.payload) {
         const m: Message = data.payload;
+        if (!isMessageForRider(m, deviceId)) return;
         if (activeChatId && m.group_id === activeChatId) {
           loadMessages(activeChatId);
         } else if (m.sender_id !== deviceId) {
@@ -380,6 +384,7 @@ export default function App() {
           { event: 'INSERT', schema: 'public', table: 'messages' },
           (payload: any) => {
             const m: Message = payload.new;
+            if (!isMessageForRider(m, deviceId)) return;
             if (activeChatId && m.group_id === activeChatId) {
               loadMessages(activeChatId);
             } else if (m.sender_id !== deviceId) {
@@ -404,14 +409,14 @@ export default function App() {
             if (c.callee_id === deviceId && c.status === 'ringing' && !preparingCallRef.current && !callSessionRef.current && !groupCallRef.current) {
               setPendingCall(c);
               if (soundEnabled) soundEffects.ringTone();
-              if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+              if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
                 navigator.serviceWorker.ready.then((reg) => {
-                  reg.showNotification(`Gelen ${c.type === 'video' ? 'Görüntülü' : 'Sesli'} Arama`, {
+                  return reg.showNotification(`Gelen ${c.type === 'video' ? 'Görüntülü' : 'Sesli'} Arama`, {
                     body: `${c.caller_name || 'Bir sürücü'} sizi arıyor...`,
                     icon: '/logo.png',
                     data: { url: window.location.href }
                   } as any);
-                });
+                }).catch(() => {});
               } else if ('Notification' in window && Notification.permission === 'granted') {
                 new Notification(`Gelen Arama: ${c.caller_name || 'Sürücü'}`, { body: 'Sizi arıyor...' });
               }
@@ -568,20 +573,15 @@ export default function App() {
 
   const handleLogout = async () => {
     if (!window.confirm('Çıkış yapmak istediğinize emin misiniz?')) return;
+    const name = currentUser;
+    handleEndCall(); setIsAttachOpen(false); setPendingCall(null); setPendingGroupCall(null);
+    activeChatRef.current = null;
+    localStorage.removeItem('rider_username'); setCurrentUser(''); setActiveChatId(null);
     const client = getSupabaseClient();
     if (client) {
-      try {
-        await client.from('profiles').upsert({
-          id: deviceId,
-          name: currentUser,
-          online: false,
-          updated_at: new Date().toISOString(),
-        });
-      } catch {}
+      try { await client.from('profiles').upsert({ id: deviceId, name, online: false, updated_at: new Date().toISOString() }); }
+      catch { /* Local logout and media cleanup already completed. */ }
     }
-    localStorage.removeItem('rider_username');
-    setCurrentUser('');
-    setActiveChatId(null);
   };
 
   const handleOpenChat = (id: string, name: string, avatar: string) => {
@@ -605,7 +605,7 @@ export default function App() {
     replyToId?: string,
     replyPreview?: { sender_name: string; text?: string | null }
   ) => {
-    if (!activeChatId || !currentUser) return;
+    if (!activeChatId || !currentUser || activeChatRef.current !== activeChatId) return;
 
     const directRecipient = activeChatId.startsWith('dm_') ? resolveRiderId(activeChatId, deviceId, dmContacts[activeChatId]?.id) : null;
 
@@ -937,57 +937,38 @@ export default function App() {
   };
 
   // Backup Export
-  const handleExportBackup = async () => {
-    const client = getSupabaseClient();
-    let serverMessages: Message[] = [];
-    if (client) {
-      try {
-        const { data } = await client.from('messages').select('*').limit(3000);
-        if (data) serverMessages = data;
-      } catch {}
-    }
-
-    const data = {
-      app: 'BizBize Riders',
-      version: 2,
-      username: currentUser,
-      deviceId,
-      customGroups: groups,
-      dmContacts,
-      messages: serverMessages.length ? serverMessages : getLocalMessages(activeChatId || 'global'),
-      exportDate: new Date().toISOString(),
-    };
-
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `BizBizeRiders_Yedek_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Yedek JSON dosyası indirildi.');
+  const handleExportBackup = () => {
+    const data = { app: 'BizBize Riders', version: 2, username: currentUser, deviceId,
+      customGroups: groups, dmContacts, messages: getAllLocalMessages(), exportDate: new Date().toISOString() };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url;
+    link.download = `BizBizeRiders_Yedek_${new Date().toISOString().slice(0, 10)}.json`;
+    link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('Cihazdaki sohbetlerin yedeği indirildi.');
   };
 
-  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = '';
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onload = async () => {
+    reader.onload = () => {
       try {
-        const json = JSON.parse(String(reader.result));
-        if (json.customGroups) {
-          setGroups((prev) => ({ ...prev, ...json.customGroups }));
+        const backup = parseBackup(String(reader.result));
+        const byGroup = new Map<string, Message[]>();
+        for (const message of backup.messages) {
+          const list = byGroup.get(message.group_id) || []; list.push(message); byGroup.set(message.group_id, list);
         }
-        if (json.dmContacts) {
-          setDmContacts((prev) => ({ ...prev, ...json.dmContacts }));
-        }
-        showToast('Yedek başarıyla yüklendi!');
+        for (const [id, history] of byGroup) updateLocalMessages(id, mergeMessages(getLocalMessages(id), history));
+        setGroups(prev => ({ ...prev, ...backup.customGroups }));
+        setDmContacts(prev => ({ ...prev, ...backup.dmContacts }));
+        if (activeChatRef.current) void loadMessages(activeChatRef.current);
         setIsBackupOpen(false);
-      } catch (err) {
-        showToast('Yedek yükleme hatası: Geçersiz JSON dosyası.');
-      }
+        showToast([...byGroup.keys()].some(id => unpersistedChats.has(id))
+          ? 'Yedek açıldı fakat cihaz hafızası dolu. Bazı mesajlar yalnızca bu oturumda tutuluyor.'
+          : 'Kortejler, rehber ve mesaj geçmişi geri yüklendi.');
+      } catch (error: any) { showToast('Yedek yüklenemedi: ' + error.message); }
     };
+    reader.onerror = () => showToast('Yedek dosyası okunamadı.');
     reader.readAsText(file);
   };
 
@@ -1017,7 +998,13 @@ export default function App() {
               isOnlineOk={isOnlineOk}
               soundEnabled={soundEnabled}
               onToggleSound={() => setSoundEnabled(!soundEnabled)}
-              onOpenPush={() => showToast('PWA bildirimleri aktif.')}
+              onOpenPush={async () => {
+                if (!('Notification' in window)) return showToast('Bu tarayıcı bildirimleri desteklemiyor.');
+                try {
+                  const permission = await Notification.requestPermission();
+                  showToast(permission === 'granted' ? 'Uygulama açıkken gelen arama bildirimleri etkin.' : 'Bildirim izni verilmedi. Tarayıcı ayarlarından değiştirebilirsiniz.');
+                } catch { showToast('Bildirim izni alınamadı.'); }
+              }}
               onOpenCallHistory={() => setIsCallHistoryOpen(true)}
               onOpenBackup={() => setIsBackupOpen(true)}
               onOpenRiders={() => setIsRidersOpen(true)}
@@ -1043,6 +1030,8 @@ export default function App() {
               />
             ) : (
               <ChatRoom
+                key={activeChatId}
+                onError={showToast}
                 chatName={activeChatName}
                 chatAvatar={activeChatAvatar}
                 isDm={activeChatId.startsWith('dm_')}
@@ -1153,100 +1142,44 @@ export default function App() {
           reader.readAsDataURL(file);
         }}
         onSendFixedLocation={() => {
-          if (!navigator.geolocation) return showToast('Konum erişimi yok.');
-          navigator.geolocation.getCurrentPosition(
-            (p) => {
-              const locData = {
-                lat: p.coords.latitude,
-                lng: p.coords.longitude,
-                at: new Date().toISOString(),
-              };
-              handleSendMessage('location', JSON.stringify(locData), 'Sabit Konum');
-              setIsAttachOpen(false);
-              showToast('Sabit konum gönderildi!');
-            },
-            () => {
-              // Fallback to custom selected location or Yomra, Trabzon
-              let fallbackLat = 40.9568;
-              let fallbackLng = 39.8617;
-              try {
-                const stored = localStorage.getItem('bizbize_rider_custom_location');
-                if (stored) {
-                  const parsed = JSON.parse(stored);
-                  if (parsed.lat && parsed.lng) {
-                    fallbackLat = parsed.lat;
-                    fallbackLng = parsed.lng;
-                  }
-                }
-              } catch {}
-              const locData = {
-                lat: fallbackLat,
-                lng: fallbackLng,
-                at: new Date().toISOString(),
-              };
-              handleSendMessage('location', JSON.stringify(locData), 'Sabit Konum');
-              setIsAttachOpen(false);
-              showToast('Konum gönderildi (GPS uyarısı: Kayıtlı konum kullanıldı).');
-            },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
-          );
+          if (!navigator.geolocation) return showToast('Konum erişimi desteklenmiyor.');
+          const request = locationGenerationRef.current;
+          const chatId = activeChatId;
+          navigator.geolocation.getCurrentPosition(position => {
+            if (request !== locationGenerationRef.current || activeChatRef.current !== chatId) return;
+            handleSendMessage('location', JSON.stringify({ lat: position.coords.latitude, lng: position.coords.longitude,
+              at: new Date().toISOString() }), 'Sabit Konum');
+            setIsAttachOpen(false); showToast('Sabit konum gönderildi.');
+          }, () => showToast('Konum alınamadı. GPS ve konum iznini kontrol edin; konum gönderilmedi.'),
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 });
         }}
         onToggleLiveLocation={() => {
           if (isLiveLocationTracking) {
-            if (liveLocationTimerRef.current) {
-              clearInterval(liveLocationTimerRef.current);
-              liveLocationTimerRef.current = null;
-            }
-            setIsLiveLocationTracking(false);
-            setIsAttachOpen(false);
-            showToast('Canlı konum paylaşımı durduruldu.');
-            return;
+            locationGenerationRef.current++;
+            if (liveLocationTimerRef.current !== null) clearInterval(liveLocationTimerRef.current);
+            liveLocationTimerRef.current = null;
+            setIsLiveLocationTracking(false); setIsAttachOpen(false);
+            showToast('Canlı konum paylaşımı durduruldu.'); return;
           }
-
           if (!navigator.geolocation) return showToast('Konum erişimi desteklenmiyor.');
-
-          const sharePosition = () => {
-            navigator.geolocation.getCurrentPosition(
-              (p) => {
-                const locData = {
-                  lat: p.coords.latitude,
-                  lng: p.coords.longitude,
-                  live: true,
-                  at: new Date().toISOString(),
-                };
-                handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
-              },
-              (err) => {
-                // If temporary error, fallback to Yomra coordinates
-                let fallbackLat = 40.9568;
-                let fallbackLng = 39.8617;
-                try {
-                  const stored = localStorage.getItem('bizbize_rider_custom_location');
-                  if (stored) {
-                    const parsed = JSON.parse(stored);
-                    if (parsed.lat && parsed.lng) {
-                      fallbackLat = parsed.lat;
-                      fallbackLng = parsed.lng;
-                    }
-                  }
-                } catch {}
-                const locData = {
-                  lat: fallbackLat,
-                  lng: fallbackLng,
-                  live: true,
-                  at: new Date().toISOString(),
-                };
-                handleSendMessage('location', JSON.stringify(locData), 'Canlı Konum');
-              },
-              { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
-            );
-          };
-
-          sharePosition();
+          const request = ++locationGenerationRef.current;
+          const chatId = activeChatId;
+          const sharePosition = () => navigator.geolocation.getCurrentPosition(position => {
+            if (request !== locationGenerationRef.current || activeChatRef.current !== chatId) return;
+            handleSendMessage('location', JSON.stringify({ lat: position.coords.latitude, lng: position.coords.longitude,
+              live: true, at: new Date().toISOString() }), 'Canlı Konum');
+          }, error => {
+            if (request !== locationGenerationRef.current) return;
+            if (error.code === 1) {
+              locationGenerationRef.current++;
+              if (liveLocationTimerRef.current !== null) clearInterval(liveLocationTimerRef.current);
+              liveLocationTimerRef.current = null; setIsLiveLocationTracking(false);
+            }
+            showToast('Konum güncellenemedi. GPS ve konum iznini kontrol edin.');
+          }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 });
           liveLocationTimerRef.current = window.setInterval(sharePosition, 10000);
-          setIsLiveLocationTracking(true);
-          setIsAttachOpen(false);
-          showToast('Canlı konum paylaşılıyor (Her 10 saniyede bir güncellenir).');
+          setIsLiveLocationTracking(true); setIsAttachOpen(false); sharePosition();
+          showToast('Canlı konum yalnızca GPS verisi alınabildiğinde paylaşılır.');
         }}
         isLiveLocationActive={isLiveLocationTracking}
         onSendVoiceNote={(audioUrl) => {

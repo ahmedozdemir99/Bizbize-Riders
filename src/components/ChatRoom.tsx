@@ -16,6 +16,7 @@ import {
   Square,
   Zap
 } from 'lucide-react';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
 import { Message, MessageType, LocationData } from '../types';
 import { MapPicker } from './MapPicker';
 import { AudioPlayer } from './AudioPlayer';
@@ -23,6 +24,7 @@ import { LiveMap } from './LiveMap';
 import { SpeedometerWidget } from './SpeedometerWidget';
 
 interface ChatRoomProps {
+  onError: (message: string) => void;
   chatName: string;
   chatAvatar: string;
   isDm: boolean;
@@ -47,6 +49,7 @@ interface ChatRoomProps {
 }
 
 export const ChatRoom: React.FC<ChatRoomProps> = ({
+  onError,
   chatName,
   chatAvatar,
   isDm,
@@ -67,6 +70,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const newestMessageRef = useRef('');
 
   const handleScrollToMessage = (targetMsgId: string) => {
     const el = document.getElementById(`chat-msg-${targetMsgId}`);
@@ -79,12 +84,16 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     }
   };
 
-  // Auto scroll on new messages
+  // Polling or reactions must not pull a rider away from the history they are reading.
   useEffect(() => {
-    if (scrollRef.current) {
+    const last = messages.at(-1);
+    const identity = last ? `${last.sender_id}_${last.time}` : '';
+    if (scrollRef.current && (nearBottomRef.current ||
+      (identity !== newestMessageRef.current && last?.sender_id === currentUserId))) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+    newestMessageRef.current = identity;
+  }, [messages, currentUserId]);
 
   const handleSendText = () => {
     const text = inputText.trim();
@@ -105,11 +114,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   };
 
   // Direct Voice Intercom Note Recording
-  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
-  const [voiceSeconds, setVoiceSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const voiceTimerRef = useRef<number | null>(null);
+  const { isRecording: isRecordingVoice, seconds: voiceSeconds, start: startVoiceRecording, stop: stopVoiceRecording } =
+    useVoiceRecorder(true, url => onSendMessage('audio', url, 'Sesli Telsiz Mesajı'), onError);
 
   const BIKER_SIGNALS = [
     { label: 'Yakıt', icon: '⛽', text: '⛽ Yakıt İhtiyacı! En yakın benzinlikte duralım.' },
@@ -120,57 +126,8 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     { label: 'Acil Yardım', icon: '🚨', text: '🚨 Acil Durum / Motor Arızası! Destek lazım.' },
   ];
 
-  const startVoiceRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      alert('Ses kaydı için mikrofon izni gereklidir.');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          onSendMessage('audio', String(reader.result), 'Sesli Telsiz Mesajı');
-        };
-        reader.readAsDataURL(audioBlob);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-
-      recorder.start();
-      setIsRecordingVoice(true);
-      setVoiceSeconds(0);
-      voiceTimerRef.current = window.setInterval(() => {
-        setVoiceSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch {
-      alert('Mikrofona erişilemedi.');
-    }
-  };
-
-  const stopVoiceRecording = () => {
-    if (mediaRecorderRef.current && isRecordingVoice) {
-      mediaRecorderRef.current.stop();
-      setIsRecordingVoice(false);
-      if (voiceTimerRef.current !== null) {
-        clearInterval(voiceTimerRef.current);
-        voiceTimerRef.current = null;
-      }
-    }
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSendText();
     }
@@ -272,6 +229,12 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       {/* Messages Feed */}
       <div
         ref={scrollRef}
+        role="log"
+        aria-label="Sohbet mesajları"
+        onScroll={event => {
+          const feed = event.currentTarget;
+          nearBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100;
+        }}
         className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0"
       >
         {messages.map((m, idx) => {
@@ -280,7 +243,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
           return (
             <div
               id={m.id ? `chat-msg-${m.id}` : undefined}
-              key={`msg-${m.group_id}-${m.id || Date.now()}-${idx}`}
+              key={`msg-${m.group_id}-${m.sender_id}-${m.time}`}
               className={`max-w-[88%] p-3 overflow-wrap-anywhere rounded-2xl flex flex-col transition-all duration-300 ${
                 highlightedMsgId && String(m.id) === String(highlightedMsgId)
                   ? 'ring-2 ring-orange-500 scale-[1.02] shadow-xl shadow-orange-500/20'

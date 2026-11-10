@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Shield, ShieldAlert, ShieldCheck, Gauge, Plus, RefreshCw, Eye, EyeOff, Info, Navigation, ExternalLink } from 'lucide-react';
+import { latestLiveLocations, escapeMapText } from '../services/location';
 import { Message, LocationData } from '../types';
 
 declare global {
@@ -48,7 +49,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
 
   // Takip Mesafesi Asistanı (Following Distance Assistant) state - OFF by default to keep screen clean
   const [isAssistantActive, setIsAssistantActive] = useState(false);
-  const [cortegeSpeed, setCortegeSpeed] = useState<number>(60); // km/s
+  const [cortegeSpeed, setCortegeSpeed] = useState<number>(60); // km/sa
   const [showInfoModal, setShowInfoModal] = useState(false);
 
   // 2-Second Safety Rule Formula:
@@ -57,37 +58,17 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
     return Math.round(cortegeSpeed * 0.555);
   }, [cortegeSpeed]);
 
-  // Extract live locations from messages
-  const liveLocations = useMemo(() => {
-    return messages
-      .filter((m) => {
-        if (m.type !== 'location' || !m.url) return false;
-        try {
-          const loc: LocationData = JSON.parse(m.url);
-          return (
-            !m.deleted &&
-            loc.live === true &&
-            Number.isFinite(loc.lat) &&
-            Number.isFinite(loc.lng) &&
-            Math.abs(loc.lat) <= 90 &&
-            Math.abs(loc.lng) <= 180
-          );
-        } catch {
-          return false;
-        }
-      })
-      .map((m) => {
-        const loc: LocationData = JSON.parse(m.url!);
-        return {
-          id: m.sender_id,
-          name: m.sender_name,
-          lat: loc.lat,
-          lng: loc.lng,
-          speed: cortegeSpeed,
-          isDemo: false,
-        } as RiderPoint;
-      });
-  }, [messages, cortegeSpeed]);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []);
+  // Each rider contributes only the most recent, fresh GPS point.
+  const liveLocations = useMemo(() => latestLiveLocations(messages, now).map(message => {
+    const location: LocationData = JSON.parse(message.url!);
+    return { id: message.sender_id, name: message.sender_name, lat: location.lat, lng: location.lng,
+      speed: cortegeSpeed, isDemo: false } as RiderPoint;
+  }), [messages, cortegeSpeed, now]);
 
   // Only real riders from actual location messages (zero fake or unfamiliar people)
   const activeRiders: RiderPoint[] = useMemo(() => {
@@ -101,7 +82,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
     if (!mapInstanceRef.current) {
       const map = window.L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
+        attributionControl: true,
       }).setView([40.9568, 39.8617], 14);
 
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -138,7 +119,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
         html: `
           <div class="relative group cursor-pointer flex flex-col items-center">
             <div class="px-2 py-0.5 rounded-md bg-zinc-950/90 border border-zinc-700 text-white text-[9px] font-bold font-mono whitespace-nowrap shadow-md mb-0.5 pointer-events-none">
-              ${rider.name}
+              ${escapeMapText(rider.name)}
             </div>
             <div class="w-8 h-8 rounded-full bg-orange-600 border-2 border-white shadow-xl flex items-center justify-center text-white text-xs font-bold transition-transform hover:scale-110">
               🏍️
@@ -155,7 +136,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       } else {
         markersRef.current[rider.id] = window.L.marker([rider.lat, rider.lng], { icon })
           .addTo(map)
-          .bindPopup(`<b>${rider.name}</b><br><span style="font-size:11px;color:#f97316">Kortej Sürücüsü • ${cortegeSpeed} km/s</span>`);
+          .bindPopup(`<b>${escapeMapText(rider.name)}</b><br><span style="font-size:11px;color:#f97316">Kortej Sürücüsü • ${cortegeSpeed} km/sa</span>`);
       }
 
       // Safety Aura Circles (Takip Asistanı Açıkken)
@@ -413,7 +394,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
           <div className="flex items-center gap-2 shrink-0 text-[10px]">
             <span className="text-zinc-500">2 Sn Kuralı:</span>
             <span className="text-orange-400 font-bold bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
-              {cortegeSpeed} km/s ➔ {safeDistanceMeters}m
+              {cortegeSpeed} km/sa ➔ {safeDistanceMeters}m
             </span>
           </div>
         </div>

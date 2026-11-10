@@ -15,9 +15,8 @@ export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, o
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name.trim()) {
-      // Use provided ID or generate a random one
-      const finalId = riderId.trim() || 'rider_' + Math.random().toString(36).slice(2);
+    if (name.trim().length >= 2 && riderId.trim()) {
+      const finalId = riderId.trim();
       onAddRider(name.trim(), finalId);
       setName('');
       setRiderId('');
@@ -56,6 +55,8 @@ export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, o
             <input
               type="text"
               required
+              minLength={2}
+              maxLength={40}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Sürücü takma adı..."
@@ -65,10 +66,12 @@ export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, o
           <div>
             <label className="block text-xs font-bold text-zinc-300 mb-1.5 uppercase tracking-wide flex items-center gap-1">
               <Hash className="w-3 h-3" />
-              Sürücü ID (İsteğe bağlı)
+              Sürücü ID (Gerekli)
             </label>
             <input
               type="text"
+              required
+              maxLength={200}
               value={riderId}
               onChange={(e) => setRiderId(e.target.value)}
               placeholder="Örn: rider_xyz123"
@@ -76,9 +79,11 @@ export const AddRiderModal: React.FC<AddRiderModalProps> = ({ isOpen, onClose, o
             />
           </div>
 
+          <p className="text-xs text-zinc-400">Karşı sürücünün profilindeki ID bilgisini girin.</p>
           <button
+            disabled={name.trim().length < 2 || !riderId.trim()}
             type="submit"
-            className="w-full py-3.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs uppercase tracking-wider biker-btn shadow-lg mt-2"
+            className="w-full py-3.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-xs uppercase tracking-wider biker-btn shadow-lg mt-2"
           >
             Sürücüyü Ekle
           </button>

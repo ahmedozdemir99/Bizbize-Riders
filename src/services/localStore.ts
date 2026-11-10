@@ -88,3 +88,12 @@ export function clearLocalMessages(groupId: string): void {
   }
   broadcastLocalEvent('CLEAR_LOCAL_MESSAGES', { groupId });
 }
+
+export function getAllLocalMessages(): Message[] {
+  const groups = new Set(memoryMessages.keys());
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(LOCAL_MSG_KEY_PREFIX)) groups.add(key.slice(LOCAL_MSG_KEY_PREFIX.length));
+  }
+  return [...groups].flatMap(group => getLocalMessages(group));
+}
