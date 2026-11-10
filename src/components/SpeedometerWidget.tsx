@@ -20,12 +20,11 @@ interface SpeedometerWidgetProps {
   onSendRideSummary?: (summaryText: string) => void;
 }
 
-interface GpsPoint {
+interface LastFix {
   lat: number;
   lng: number;
   time: number;
   accuracy: number;
-  rawSpeed: number | null;
 }
 
 // Haversine formula to compute distance in meters between two GPS coordinates
@@ -59,113 +58,119 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
   const [gpsStatus, setGpsStatus] = useState<'searching' | 'active' | 'denied' | 'error'>('searching');
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
   const [fixCount, setFixCount] = useState(0);
-  const [lastFixTime, setLastFixTime] = useState<number>(0);
+  const [calculationMethod, setCalculationMethod] = useState<'gnss_speed' | 'distance_time' | 'stationary'>('stationary');
+  const [lastDt, setLastDt] = useState<number>(0);
+  const [lastDeltaDist, setLastDeltaDist] = useState<number>(0);
   const [showDiagModal, setShowDiagModal] = useState(false);
   const [showZeroWarningModal, setShowZeroWarningModal] = useState(false);
   const [rawGpsSpeed, setRawGpsSpeed] = useState<number | null>(null);
   const [lastCoordDisplay, setLastCoordDisplay] = useState<string>('');
 
-  // Rolling GPS history for smooth and robust speed calculation
-  const historyRef = useRef<GpsPoint[]>([]);
-  const lastRecordedDistancePosRef = useRef<{ lat: number; lng: number } | null>(null);
+  // Refs to avoid tearing down GPS watcher when state changes
+  const isTrackingRef = useRef(isTracking);
+  isTrackingRef.current = isTracking;
+  const isDemoModeRef = useRef(isDemoMode);
+  isDemoModeRef.current = isDemoMode;
+
+  const lastFixRef = useRef<LastFix | null>(null);
+  const lastDistancePosRef = useRef<{ lat: number; lng: number } | null>(null);
   const timerRef = useRef<number | null>(null);
   const demoIntervalRef = useRef<number | null>(null);
   const watchIdRef = useRef<number | null>(null);
 
-  // Function to process each incoming GPS position fix
+  // Core Position Processor with (distance / time) fallback
   const processPositionFix = (position: GeolocationPosition) => {
+    if (isDemoModeRef.current) return;
+
     const now = Date.now();
     const currentLat = position.coords.latitude;
     const currentLng = position.coords.longitude;
     const accuracy = position.coords.accuracy;
-    const nativeSpeedMps = position.coords.speed; // meters per second
+    const nativeSpeedMps = position.coords.speed; // meters per second from GNSS
 
     setGpsStatus('active');
     setGpsAccuracy(Math.round(accuracy));
-    setLastFixTime(now);
     setFixCount((prev) => prev + 1);
     setLastCoordDisplay(`${currentLat.toFixed(5)}, ${currentLng.toFixed(5)}`);
 
-    let nativeKmH = 0;
-    if (typeof nativeSpeedMps === 'number' && !isNaN(nativeSpeedMps) && nativeSpeedMps >= 0) {
-      nativeKmH = Math.round(nativeSpeedMps * 3.6);
-      setRawGpsSpeed(nativeKmH);
+    let finalKmH = 0;
+    let method: 'gnss_speed' | 'distance_time' | 'stationary' = 'stationary';
+
+    // 1. Check if hardware GNSS 'speed' vector is valid (non-null, non-NaN, >= 0)
+    const hasValidNativeSpeed = 
+      nativeSpeedMps !== null && 
+      nativeSpeedMps !== undefined && 
+      !isNaN(nativeSpeedMps) && 
+      nativeSpeedMps > 0.5;
+
+    if (hasValidNativeSpeed) {
+      finalKmH = Math.round(nativeSpeedMps * 3.6);
+      method = 'gnss_speed';
+      setRawGpsSpeed(finalKmH);
     } else {
       setRawGpsSpeed(null);
-    }
+      // 2. 'speed' verisi geçersiz (null, 0 veya tanımsız) ise: (distance / time) formülüyle hesapla
+      if (lastFixRef.current) {
+        const dtSeconds = (now - lastFixRef.current.time) / 1000;
+        const deltaMeters = calculateDistanceMeters(
+          lastFixRef.current.lat,
+          lastFixRef.current.lng,
+          currentLat,
+          currentLng
+        );
 
-    // Add current point to rolling buffer
-    const currentPoint: GpsPoint = {
-      lat: currentLat,
-      lng: currentLng,
-      time: now,
-      accuracy,
-      rawSpeed: nativeKmH > 0 ? nativeKmH : null,
-    };
+        setLastDt(Number(dtSeconds.toFixed(1)));
+        setLastDeltaDist(Number(deltaMeters.toFixed(1)));
 
-    // Keep only points from the last 5 seconds
-    const updatedHistory = [...historyRef.current.filter((p) => now - p.time <= 5000), currentPoint];
-    historyRef.current = updatedHistory;
+        // 1-2 saniyelik periyotta hesaplama yap (en az 0.6 sn, en fazla 5 sn)
+        if (dtSeconds >= 0.6 && dtSeconds <= 5.0) {
+          // speed = distance / time (m/s) -> * 3.6 = km/s
+          const speedMps = deltaMeters / dtSeconds;
+          const calculatedKmH = Math.round(speedMps * 3.6);
 
-    // Derived speed from displacement across 1.0s to 3.5s window
-    let derivedKmH = 0;
-    if (updatedHistory.length >= 2) {
-      // Find a prior point that is at least 0.9s ago to overcome jitter
-      const priorPoint = updatedHistory.find((p) => now - p.time >= 900 && now - p.time <= 3800);
-      if (priorPoint) {
-        const dtSec = (now - priorPoint.time) / 1000;
-        const deltaM = calculateDistanceMeters(priorPoint.lat, priorPoint.lng, currentLat, currentLng);
-
-        // If distance moved is greater than 1.5m and not an impossible jump (> 200 km/h)
-        if (dtSec > 0.7 && deltaM >= 1.2 && deltaM < 300) {
-          const calcSpeed = Math.round((deltaM / dtSec) * 3.6);
-          if (calcSpeed < 220) {
-            derivedKmH = calcSpeed;
+          // Titreşim (jitter) filtresi: 1.2 metreden az hareket kırmızı ışık veya durağan sayılır
+          if (deltaMeters >= 1.2 && calculatedKmH >= 3 && calculatedKmH <= 220) {
+            finalKmH = calculatedKmH;
+            method = 'distance_time';
           }
         }
       }
     }
 
-    // Final Speed: choose native GNSS speed if reliable, or derived displacement speed
-    let calculatedSpeed = 0;
-    if (nativeKmH > 0) {
-      calculatedSpeed = nativeKmH;
-    } else if (derivedKmH > 0) {
-      calculatedSpeed = derivedKmH;
-    }
+    setCalculationMethod(method);
+    setSpeed(finalKmH);
 
-    // Filter out walking / stationary jitter (< 3 km/s)
-    if (calculatedSpeed < 3) {
-      calculatedSpeed = 0;
-    }
-
-    setSpeed(calculatedSpeed);
-
-    // If recording a trip:
-    if (isTracking) {
-      if (calculatedSpeed > 0) {
-        setMaxSpeed((m) => Math.max(m, calculatedSpeed));
+    // Sürüş Takibi (Ride Tracking) Mesafesi & Maksimum Hız
+    if (isTrackingRef.current) {
+      if (finalKmH > 0) {
+        setMaxSpeed((prev) => Math.max(prev, finalKmH));
       }
 
-      // Track distance using a dedicated anchor point
-      if (!lastRecordedDistancePosRef.current) {
-        lastRecordedDistancePosRef.current = { lat: currentLat, lng: currentLng };
+      if (!lastDistancePosRef.current) {
+        lastDistancePosRef.current = { lat: currentLat, lng: currentLng };
       } else {
         const stepDist = calculateDistanceMeters(
-          lastRecordedDistancePosRef.current.lat,
-          lastRecordedDistancePosRef.current.lng,
+          lastDistancePosRef.current.lat,
+          lastDistancePosRef.current.lng,
           currentLat,
           currentLng
         );
 
-        // Accept step distance if moved >= 2.5 meters (prevents GPS drift while stopped at bus stop)
-        // and ignore cellular tower jumps (> 300m)
-        if (stepDist >= 2.5 && stepDist < 300) {
+        // Durağan GPS kaymalarını filtreleyip gerçek araç hareketini (>= 2.0 m) ekle
+        if (stepDist >= 2.0 && stepDist < 400) {
           setDistanceMeters((d) => d + stepDist);
-          lastRecordedDistancePosRef.current = { lat: currentLat, lng: currentLng };
+          lastDistancePosRef.current = { lat: currentLat, lng: currentLng };
         }
       }
     }
+
+    // Bir sonraki (distance / time) hesaplaması için referans noktasını güncelle
+    lastFixRef.current = {
+      lat: currentLat,
+      lng: currentLng,
+      time: now,
+      accuracy,
+    };
   };
 
   // Direct user-gesture trigger to request & prompt Location permission in Android Chrome
@@ -188,25 +193,21 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
           setGpsStatus('searching');
         }
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
-  // 1. Core GPS Watcher with auto-recovery and aggressive continuous polling
+  // 1. GPS Watcher: Real-time sampling with watchPosition + 1s periodic polling
   useEffect(() => {
-    if (isDemoMode) return;
-
     if (!navigator.geolocation) {
       setGpsStatus('error');
       return;
     }
 
-    // Initial check for permission state if supported
+    // Check permission state if supported
     if (navigator.permissions && navigator.permissions.query) {
       navigator.permissions.query({ name: 'geolocation' }).then((status) => {
-        if (status.state === 'denied') {
-          setGpsStatus('denied');
-        }
+        if (status.state === 'denied') setGpsStatus('denied');
         status.onchange = () => {
           if (status.state === 'denied') setGpsStatus('denied');
           if (status.state === 'granted') setGpsStatus('active');
@@ -214,12 +215,13 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
       }).catch(() => {});
     }
 
-    const startWatcher = () => {
+    const startGpsEngine = () => {
       try {
         if (watchIdRef.current !== null) {
           navigator.geolocation.clearWatch(watchIdRef.current);
         }
 
+        // Primary: watchPosition with high accuracy and 0 maximumAge
         watchIdRef.current = navigator.geolocation.watchPosition(
           processPositionFix,
           (err) => {
@@ -231,8 +233,8 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
           },
           {
             enableHighAccuracy: true,
-            maximumAge: 0, // CRITICAL: Never return stale cached fixes!
-            timeout: 12000,
+            maximumAge: 0, // Her zaman en güncel uydu verisini al
+            timeout: 10000,
           }
         );
       } catch {
@@ -240,18 +242,19 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
       }
     };
 
-    startWatcher();
+    startGpsEngine();
 
-    // Secondary high-frequency poller (runs every 1.2s to guarantee fixes even if watchPosition throttles in Chrome)
-    const pollerInterval = setInterval(() => {
-      if (!isDemoMode && navigator.geolocation) {
+    // Secondary: Explicit 1-2 second continuous sampling poller
+    // Guarantees consistent (distance / time) updates every 1-2 seconds even if watchPosition throttles
+    const samplingTimer = setInterval(() => {
+      if (!isDemoModeRef.current && navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           processPositionFix,
           () => {},
           {
             enableHighAccuracy: true,
             maximumAge: 0,
-            timeout: 4000,
+            timeout: 3000,
           }
         );
       }
@@ -262,9 +265,9 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      clearInterval(pollerInterval);
+      clearInterval(samplingTimer);
     };
-  }, [isDemoMode, isTracking]);
+  }, []); // Keeps running continuously without tear-down
 
   // 2. Dynamic Motorcycle/Vehicle Simulator for Test Mode
   useEffect(() => {
@@ -334,12 +337,10 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
     if (demo) {
       setSpeed(38);
     }
-    lastRecordedDistancePosRef.current = null;
-    historyRef.current = [];
+    lastDistancePosRef.current = null;
     setIsCollapsed(false);
     setShowZeroWarningModal(false);
 
-    // If starting real GPS, immediately request a fresh fix
     if (!demo) {
       requestLocationPermission();
     }
@@ -404,7 +405,6 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
   };
 
   const handleFinishRide = () => {
-    // If user conducted a test indoors with GPS and remained completely stationary
     if (!isDemoMode && distanceMeters < 5 && elapsedSec >= 5) {
       setShowZeroWarningModal(true);
       return;
@@ -434,7 +434,7 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
             <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
               <div className="flex items-center gap-2 text-orange-400">
                 <Radio className="w-5 h-5 animate-pulse" />
-                <h3 className="font-bold text-white text-sm">GPS Canlı Sensör Verileri</h3>
+                <h3 className="font-bold text-white text-sm">GPS Canlı Sensör & Hız Formülü</h3>
               </div>
               <button 
                 onClick={() => setShowDiagModal(false)}
@@ -453,21 +453,39 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
               </div>
 
               <div className="bg-zinc-950 p-2 rounded-xl border border-zinc-800">
-                <span className="text-[10px] text-zinc-500 block">UYDU HASSASİYETİ</span>
-                <span className="font-bold text-white">
-                  {gpsAccuracy !== null ? `±${gpsAccuracy} m` : 'Bilinmiyor'}
+                <span className="text-[10px] text-zinc-500 block">HESAPLAMA METODU</span>
+                <span className="font-bold text-sky-400 text-[11px]">
+                  {calculationMethod === 'gnss_speed' 
+                    ? '⚡ Uydu Hızı' 
+                    : calculationMethod === 'distance_time' 
+                      ? '📐 (Mesafe / Zaman)' 
+                      : '🛑 Durağan (0 km/s)'}
                 </span>
               </div>
 
               <div className="bg-zinc-950 p-2 rounded-xl border border-zinc-800">
-                <span className="text-[10px] text-zinc-500 block">GÖSTERGE HIZI</span>
+                <span className="text-[10px] text-zinc-500 block">ANLIK HIZ</span>
                 <span className="font-bold text-orange-400 text-sm">{speed} km/s</span>
               </div>
 
               <div className="bg-zinc-950 p-2 rounded-xl border border-zinc-800">
-                <span className="text-[10px] text-zinc-500 block">HAM GNSS HIZI</span>
+                <span className="text-[10px] text-zinc-500 block">ÖRNEKLEME ZAMANI (Δt)</span>
                 <span className="font-bold text-zinc-300">
-                  {rawGpsSpeed !== null ? `${rawGpsSpeed} km/s` : 'Hesaplanan'}
+                  {lastDt > 0 ? `${lastDt} sn` : '1-2 sn'}
+                </span>
+              </div>
+
+              <div className="bg-zinc-950 p-2 rounded-xl border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">SON ADIM MESAFESİ (Δd)</span>
+                <span className="font-bold text-zinc-300">
+                  {lastDeltaDist > 0 ? `${lastDeltaDist} m` : 'Hesaplanıyor'}
+                </span>
+              </div>
+
+              <div className="bg-zinc-950 p-2 rounded-xl border border-zinc-800">
+                <span className="text-[10px] text-zinc-500 block">UYDU HASSASİYETİ</span>
+                <span className="font-bold text-white">
+                  {gpsAccuracy !== null ? `±${gpsAccuracy} m` : 'Bilinmiyor'}
                 </span>
               </div>
 
@@ -577,7 +595,7 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
                   ? 'bg-orange-500/20 border-orange-500 text-orange-400 shadow-sm shadow-orange-500/30' 
                   : 'bg-zinc-900 border-zinc-800 text-zinc-400'
               }`}
-              title="GPS Canlı Sensör Bilgisi"
+              title="GPS Canlı Sensör & Hesaplama Formülü Bilgisi"
             >
               <Gauge className={`w-4 h-4 ${speed > 0 ? 'animate-pulse text-orange-500' : ''}`} />
             </div>
@@ -596,7 +614,7 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
               <button 
                 onClick={() => setShowDiagModal(true)}
                 className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-400 hover:text-white transition text-left"
-                title="Detaylı GPS Bilgisi İçin Dokunun"
+                title="Detaylı GPS ve Hız Formülü Bilgisi"
               >
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                   isDemoMode 
@@ -611,7 +629,9 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
                   {isDemoMode 
                     ? 'Test Modu' 
                     : gpsStatus === 'active' 
-                      ? `GPS (±${gpsAccuracy || 0}m)` 
+                      ? calculationMethod === 'distance_time' 
+                        ? `GPS Δd/Δt (±${gpsAccuracy || 0}m)`
+                        : `GPS (±${gpsAccuracy || 0}m)` 
                       : gpsStatus === 'denied'
                         ? 'İzin Ver'
                         : 'Uydu Aranıyor'}
@@ -636,7 +656,7 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center gap-1 shrink-0">
-            {/* If Permission is Denied or Searching with 0 fixes, show prominent Location button */}
+            {/* If Permission is Denied, show prominent Location button */}
             {gpsStatus === 'denied' ? (
               <button
                 onClick={requestLocationPermission}
