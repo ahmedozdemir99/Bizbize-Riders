@@ -116,3 +116,14 @@ npm run build
 Testler gateway kimliğini, CORS/SSRF korumasını, gerçek PostgreSQL tetikleyicilerini,
 çift worker kilidini, tekrar denemeyi, şifrelenmiş gönderimi ve tarayıcı abonelik akışını
 kontrol eder. Canlı Supabase projesine veya gerçek telefonlara test bildirimi göndermez.
+
+## Telefonda Supabase editörüyle fonksiyon yükleme
+
+`npm run push:editor` kaynak dosyaları tek bir editör dosyasına toplar.
+Supabase → Edge Functions → yeni fonksiyon editöründe `index.ts` içeriğini tamamen
+silip `supabase/functions/push/editor-bundle.ts` dosyasının tamamını yapıştırın.
+Fonksiyon adı **push** olmalı. Dağıtımdan sonra fonksiyon ayarlarında platformun
+**Verify JWT / legacy JWT verification** kontrolünü kapatın; kod abonelik JWT'sini
+ve worker sırrını kendisi doğrular. Aksi halde anahtarla çağrılan cron worker'ı
+platform tarafından reddedilir. Ardından bu rehberdeki Secrets ve Vault kurulumunu
+tamamlayın. Anahtarlar kurulmadan fonksiyonun `push_not_configured` yanıtı vermesi beklenir.

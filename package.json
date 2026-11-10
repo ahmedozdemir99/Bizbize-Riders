@@ -14,7 +14,8 @@
     "test:ios": "node tests/ios-smoke.cjs",
     "push:keys": "node scripts/generate-push-keys.mjs",
     "test:push": "tsx tests/push-backend.ts && tsx tests/push-sql.ts",
-    "test:push-client": "node tests/web-push-client.cjs"
+    "test:push-client": "node tests/web-push-client.cjs",
+    "push:editor": "node scripts/build-push-editor.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
