@@ -36,6 +36,7 @@ interface CallScreenModalProps {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   groupRemoteStreams?: Record<string, { name: string; stream: MediaStream }>;
+  peerConnection?: RTCPeerConnection | null;
   onEndCall: () => void;
 }
 
@@ -48,10 +49,46 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
   localStream,
   remoteStream,
   groupRemoteStreams = {},
+  peerConnection = null,
   onEndCall,
 }) => {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
+  const [packetLoss, setPacketLoss] = useState<number>(0);
+  const [jitter, setJitter] = useState<number>(0);
+  const [rtt, setRtt] = useState<number>(0);
+
+  React.useEffect(() => {
+    if (!isOpen || !peerConnection) return;
+    const interval = setInterval(async () => {
+      try {
+        const stats = await peerConnection.getStats();
+        let pktsLost = 0;
+        let pktsReceived = 0;
+        let jit = 0;
+        let roundTrip = 0;
+
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp') {
+            if (typeof report.packetsLost === 'number') pktsLost = report.packetsLost;
+            if (typeof report.packetsReceived === 'number') pktsReceived = report.packetsReceived;
+            if (typeof report.jitter === 'number') jit = report.jitter * 1000; // convert to ms
+          }
+          if (report.type === 'remote-inbound-rtp' && typeof report.roundTripTime === 'number') {
+            roundTrip = report.roundTripTime * 1000;
+          }
+        });
+
+        const total = pktsLost + pktsReceived;
+        const lossPercent = total > 0 ? (pktsLost / total) * 100 : 0;
+        setPacketLoss(Number(lossPercent.toFixed(1)));
+        setJitter(Number(jit.toFixed(1)));
+        setRtt(Number(roundTrip.toFixed(0)));
+      } catch {}
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isOpen, peerConnection]);
 
   useEffect(() => {
     setIsMicMuted(false);
@@ -115,6 +152,24 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
           </div>
           <div className="text-sm font-semibold text-emerald-400 bg-emerald-950/60 px-4 py-1 rounded-full border border-emerald-500/30">
             {statusText}
+          </div>
+
+          {/* WebRTC Diagnostics Monitor */}
+          <div className="mt-3 bg-zinc-950/90 border border-zinc-800 rounded-2xl p-3 max-w-xs w-full text-left font-mono text-[11px] text-zinc-300 space-y-1 shadow-xl">
+            <div className="text-[10px] text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center justify-between">
+              <span>WebRTC Diagnostik</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            </div>
+            <div><span className="text-zinc-500">ICE State:</span> <span className="text-white">{peerConnection?.iceConnectionState || 'new'}</span></div>
+            <div><span className="text-zinc-500">Signaling:</span> <span className="text-white">{peerConnection?.signalingState || 'stable'}</span></div>
+            <div><span className="text-zinc-500">Connection:</span> <span className="text-white">{peerConnection?.connectionState || 'new'}</span></div>
+            <div><span className="text-zinc-500">Local Stream:</span> <span className={localStream ? 'text-emerald-400' : 'text-red-400'}>{localStream ? 'Aktif (' + localStream.getTracks().length + ' track)' : 'Yok'}</span></div>
+            <div><span className="text-zinc-500">Remote Stream:</span> <span className={remoteStream ? 'text-emerald-400' : 'text-amber-400'}>{remoteStream ? 'Bağlandı (' + remoteStream.getTracks().length + ' track)' : 'Bekleniyor...'}</span></div>
+            <div className="border-t border-zinc-800 pt-1 mt-1 flex justify-between">
+              <span>Paket Kaybı: <strong className={packetLoss > 5 ? 'text-red-400' : 'text-emerald-400'}>%{packetLoss}</strong></span>
+              <span>Jitter: <strong className="text-sky-400">{jitter}ms</strong></span>
+              <span>RTT: <strong className="text-orange-400">{rtt}ms</strong></span>
+            </div>
           </div>
         </div>
       )}
