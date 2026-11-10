@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Key, Shield, Database } from 'lucide-react';
-import { MotorcycleIcon } from './MotorcycleIcon';
+import { BrandLogo } from './BrandLogo';
 
 interface LoginScreenProps {
   onLogin: (name: string) => void;
@@ -19,15 +19,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onOpenSqlModa
 
   return (
     <section className="flex flex-col h-full w-full items-center justify-center p-6 bg-zinc-950 relative overflow-hidden select-none">
-      {/* Background Motorcycle Graphic Accent */}
-      <div className="absolute -right-16 -bottom-16 text-zinc-900/40 pointer-events-none">
-        <MotorcycleIcon className="w-[340px] h-[340px]" />
-      </div>
+      <div aria-hidden="true" className="absolute -right-32 -bottom-32 w-96 h-96 rounded-full border-[40px] border-zinc-900/40 pointer-events-none" />
 
       {/* Main Logo Container */}
-      <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center shadow-2xl mb-6 border border-white/20 relative z-10 animate-pulse">
-        <MotorcycleIcon className="w-14 h-14 text-white" />
-      </div>
+      <BrandLogo className="w-28 h-28 mb-6 relative z-10 shadow-[0_16px_60px_-12px_rgba(249,115,22,0.35)] rounded-[30px]" />
 
       <h1 className="font-display font-bold text-4xl text-white tracking-wider uppercase mb-2 relative z-10">
         BizBize <span className="text-orange-500">Riders</span>
@@ -42,6 +37,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onOpenSqlModa
         <div className="rounded-2xl flex items-center px-5 py-3.5 biker-input">
           <Shield className="w-5 h-5 text-orange-500 shrink-0" />
           <input
+            aria-label="Sürücü adın"
+            minLength={2}
+            required
             type="text"
             maxLength={40}
             value={name}

@@ -159,6 +159,17 @@ export default function App() {
     }
   };
 
+  // A tracking callback belongs to one chat and one signed-in session.
+  useEffect(() => {
+    setIsLiveLocationTracking(false);
+    return () => {
+      if (liveLocationTimerRef.current !== null) {
+        clearInterval(liveLocationTimerRef.current);
+        liveLocationTimerRef.current = null;
+      }
+    };
+  }, [activeChatId, currentUser]);
+
   // 1. Initial Supabase Setup & Heartbeat with Offline Resilience
   useEffect(() => {
     const client = getSupabaseClient();
@@ -404,6 +415,12 @@ export default function App() {
   };
 
   const handleOpenChat = (id: string, name: string, avatar: string) => {
+    if (id.startsWith('dm_')) {
+      const rider = allRiders.find((r) => 'dm_' + [deviceId, r.id].sort().join('_') === id);
+      if (rider) {
+        setDmContacts((prev) => ({ ...prev, [id]: { id: rider.id, name, avatar } }));
+      }
+    }
     setActiveChatId(id);
     setActiveChatName(name);
     setActiveChatAvatar(avatar);

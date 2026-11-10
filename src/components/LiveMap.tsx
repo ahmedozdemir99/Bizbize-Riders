@@ -25,7 +25,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       if (m.type !== 'location' || !m.url) return false;
       try {
         const loc: LocationData = JSON.parse(m.url);
-        return loc.live === true && loc.lat != null && loc.lng != null;
+        return !m.deleted && loc.live === true && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)
+          && Math.abs(loc.lat) <= 90 && Math.abs(loc.lng) <= 180;
       } catch {
         return false;
       }
@@ -35,11 +36,12 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       // Initialize map
       const map = window.L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
+        attributionControl: true,
       }).setView([0, 0], 2);
 
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
 
       mapInstanceRef.current = map;
@@ -69,7 +71,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       } else {
         markersRef.current[markerId] = window.L.marker([loc.lat, loc.lng], { icon })
           .addTo(map)
-          .bindPopup(m.sender_name);
+          .bindPopup(Object.assign(document.createElement('span'), { textContent: m.sender_name }));
       }
     });
 
@@ -100,6 +102,12 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       }
     }
   }, [messages]);
+
+  useEffect(() => () => {
+    mapInstanceRef.current?.remove();
+    mapInstanceRef.current = null;
+    markersRef.current = {};
+  }, []);
 
   return (
     <div className={`relative rounded-xl overflow-hidden border border-zinc-700 bg-zinc-900 ${className}`}>

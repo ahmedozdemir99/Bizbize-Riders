@@ -11,7 +11,7 @@ import {
   MoreVertical,
   X
 } from 'lucide-react';
-import { MotorcycleIcon } from './MotorcycleIcon';
+import { BrandLogo } from './BrandLogo';
 
 interface HeaderProps {
   statusText: string;
@@ -64,9 +64,7 @@ export const Header: React.FC<HeaderProps> = ({
         className="flex items-center gap-2.5 min-w-0 cursor-pointer group"
         title="Veritabanı Durumu & Ayarları"
       >
-        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center shadow-md border border-white/10 shrink-0">
-          <MotorcycleIcon className="w-6 h-6 text-white" />
-        </div>
+        <BrandLogo className="w-10 h-10 shrink-0" />
         <div className="min-w-0">
           <h1 className="font-display font-bold text-lg sm:text-xl text-white tracking-wide uppercase leading-tight truncate">
             BizBize <span className="text-orange-500">Riders</span>
@@ -123,6 +121,8 @@ export const Header: React.FC<HeaderProps> = ({
               ? 'bg-orange-600 border-orange-500 text-white'
               : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-200'
           }`}
+          aria-label="Menü ve Ayarlar"
+          aria-expanded={isMenuOpen}
           title="Menü ve Ayarlar"
         >
           {isMenuOpen ? <X className="w-4 h-4" /> : <MoreVertical className="w-4 h-4" />}

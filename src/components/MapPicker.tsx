@@ -33,11 +33,12 @@ export const MapPicker: React.FC<MapPickerProps> = ({
     if (!mapInstanceRef.current) {
       const map = window.L.map(mapContainerRef.current, {
         zoomControl: false,
-        attributionControl: false,
+        attributionControl: true,
       }).setView([lat, lng], 15);
 
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
 
       // Custom marker icon
@@ -62,6 +63,12 @@ export const MapPicker: React.FC<MapPickerProps> = ({
       }
     }
   }, [location.lat, location.lng, isLive]);
+
+  useEffect(() => () => {
+    mapInstanceRef.current?.remove();
+    mapInstanceRef.current = null;
+    markerRef.current = null;
+  }, []);
 
   const mapsUrl = `https://maps.google.com/?q=${location.lat},${location.lng}`;
 
