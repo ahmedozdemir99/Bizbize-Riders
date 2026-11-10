@@ -46,10 +46,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
   const circlesRef = useRef<any[]>([]);
   const distanceTagsRef = useRef<any[]>([]);
 
-  // Takip Mesafesi Asistanı (Following Distance Assistant) state
-  const [isAssistantActive, setIsAssistantActive] = useState(true);
+  // Takip Mesafesi Asistanı (Following Distance Assistant) state - OFF by default to keep screen clean
+  const [isAssistantActive, setIsAssistantActive] = useState(false);
   const [cortegeSpeed, setCortegeSpeed] = useState<number>(60); // km/s
-  const [includeDemoRiders, setIncludeDemoRiders] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
 
   // 2-Second Safety Rule Formula:
@@ -90,47 +89,10 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       });
   }, [messages, cortegeSpeed]);
 
-  // Combined real + demo riders for immediate testability
+  // Only real riders from actual location messages (zero fake or unfamiliar people)
   const activeRiders: RiderPoint[] = useMemo(() => {
-    const list = [...liveLocations];
-    
-    // If user requested demo cortege riders or if room is empty
-    if (includeDemoRiders || list.length === 0) {
-      const baseLat = list.length > 0 ? list[0].lat : 41.0082; // Default Istanbul / Marmara or user pos
-      const baseLng = list.length > 0 ? list[0].lng : 28.9784;
-
-      if (list.length === 0) {
-        list.push({
-          id: 'demo-lead',
-          name: 'Kortej Lideri (Öncü)',
-          lat: baseLat + 0.0006,
-          lng: baseLng + 0.0007,
-          speed: cortegeSpeed,
-          isDemo: true,
-        });
-      }
-
-      list.push({
-        id: 'demo-rider-1',
-        name: 'Rüzgar Biker',
-        lat: baseLat - 0.00045, // ~50m behind
-        lng: baseLng - 0.0005,
-        speed: cortegeSpeed,
-        isDemo: true,
-      });
-
-      list.push({
-        id: 'demo-rider-2',
-        name: 'Kaan Demir (Artçı)',
-        lat: baseLat - 0.00095, // ~55m behind second rider
-        lng: baseLng - 0.0010,
-        speed: cortegeSpeed,
-        isDemo: true,
-      });
-    }
-
-    return list;
-  }, [liveLocations, includeDemoRiders, cortegeSpeed]);
+    return liveLocations;
+  }, [liveLocations]);
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -140,7 +102,7 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
       const map = window.L.map(mapContainerRef.current, {
         zoomControl: false,
         attributionControl: false,
-      }).setView([41.0082, 28.9784], 14);
+      }).setView([40.9568, 39.8617], 14);
 
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
@@ -312,8 +274,11 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
 
   // Calculate cortege safety summary
   const cortegeSummary = useMemo(() => {
-    if (activeRiders.length < 2) {
-      return { status: 'single', message: 'Kortejde en az 2 sürücü olmalıdır.' };
+    if (activeRiders.length === 0) {
+      return { status: 'empty', message: 'Kortejde henüz konum paylaşan başka sürücü yok.' };
+    }
+    if (activeRiders.length === 1) {
+      return { status: 'single', message: `1 sürücü aktif (${activeRiders[0].name}). Takip asistanı için 2+ sürücü bekleniyor.` };
     }
     let minGap = Infinity;
     for (let i = 0; i < activeRiders.length - 1; i++) {
@@ -403,34 +368,22 @@ export const LiveMap: React.FC<LiveMapProps> = ({ messages, className = 'h-64 w-
           </div>
         )}
 
-        {/* Demo Riders Toggle (For testing without multiple physical devices) */}
-        <div className="pointer-events-auto flex items-center gap-1">
-          <button
-            onClick={() => setIncludeDemoRiders((prev) => !prev)}
-            className={`py-1 px-2 rounded-xl text-[11px] font-bold flex items-center gap-1 transition shadow-2xl backdrop-blur-md ${
-              includeDemoRiders
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : 'bg-zinc-950/90 text-zinc-400 hover:text-white border border-zinc-800 hover:bg-zinc-800'
-            }`}
-            title="Haritaya simüle edilmiş kortej sürücüleri ekle"
+        {/* Google Maps Quick Launch */}
+        <div className="pointer-events-auto">
+          <a
+            href={
+              activeRiders.length > 0
+                ? `https://www.google.com/maps/search/?api=1&query=${activeRiders[0].lat},${activeRiders[0].lng}`
+                : `https://www.google.com/maps/search/?api=1&query=40.9568,39.8617`
+            }
+            target="_blank"
+            rel="noopener noreferrer"
+            className="py-1 px-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xl backdrop-blur-md transition biker-btn active:scale-95 border border-orange-400/30"
+            title="Konumu Google Haritalar uygulamasında aç"
           >
-            <Plus className="w-3 h-3" />
-            <span>{includeDemoRiders ? 'Kortej (Aktif)' : '+ Kortej'}</span>
-          </button>
-
-          {/* Quick Google Maps Launch */}
-          {activeRiders.length > 0 && (
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${activeRiders[0].lat},${activeRiders[0].lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="py-1 px-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xl backdrop-blur-md transition biker-btn active:scale-95 border border-orange-400/30"
-              title="Kortej konumunu Google Haritalar'da aç"
-            >
-              <Navigation className="w-3 h-3 fill-current" />
-              <span>Haritalar</span>
-            </a>
-          )}
+            <Navigation className="w-3 h-3 fill-current" />
+            <span>Google Haritalar</span>
+          </a>
         </div>
       </div>
 

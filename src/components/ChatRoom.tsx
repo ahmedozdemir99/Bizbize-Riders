@@ -43,6 +43,7 @@ interface ChatRoomProps {
   onUpdateMessage: (messageId: string, reactions: string[]) => void;
   onShowGroupMap: () => void;
   onOpenRoadAlert: () => void;
+  onDeleteMessage?: (messageId: string) => void;
 }
 
 export const ChatRoom: React.FC<ChatRoomProps> = ({
@@ -60,6 +61,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   onUpdateMessage,
   onShowGroupMap,
   onOpenRoadAlert,
+  onDeleteMessage,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
@@ -247,7 +249,11 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
           </button>
 
           <button
-            onClick={onClearMessages}
+            onClick={() => {
+              if (window.confirm('Bu sohbetteki tüm mesajlar kalıcı olarak silinsin mi?')) {
+                onClearMessages();
+              }
+            }}
             className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-zinc-900 border border-zinc-800 text-red-400 hover:border-red-500/50 flex items-center justify-center biker-btn shadow-sm"
             title="Mesajları Temizle"
           >
@@ -367,7 +373,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 )
               )}
 
-              {/* Live Map for Group Members with Direct Google Maps Link */}
+              {/* Live Location Message with Real Google Maps */}
               {m.type === 'location' && (() => {
                 let loc: LocationData | null = null;
                 try {
@@ -375,41 +381,35 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                 } catch {}
 
                 if (loc?.live && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
-                  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`;
                   return (
                     <div className="mt-2 space-y-2 w-full">
                       <div className="flex items-center justify-between px-1">
                         <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
                           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                          <span>CANLI KONUM PAYLAŞIMI</span>
+                          <span>CANLI KONUM (GOOGLE HARİTALAR)</span>
                         </span>
                         <span className="text-[10px] text-zinc-400 font-mono">
                           {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
                         </span>
                       </div>
 
-                      <div className="rounded-2xl overflow-hidden border border-emerald-500/30">
-                        <LiveMap messages={messages.filter(msg => msg.type === 'location')} className="h-56 w-full" />
-                      </div>
+                      {/* Direct Google Maps View (No UI clutter covering map) */}
+                      <MapPicker location={loc} isLive={true} />
 
-                      <a
-                        href={mapsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 biker-btn transition active:scale-98"
-                        title="Canlı Konumu Google Haritalar'da Aç"
+                      {/* Optional Fullscreen Cortege Radar Shortcut */}
+                      <button
+                        onClick={onShowGroupMap}
+                        className="w-full py-2 px-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-300 hover:text-white text-[11px] font-bold flex items-center justify-center gap-2 transition biker-btn shadow-sm"
                       >
-                        <Navigation className="w-4 h-4 fill-current" />
-                        <span>Google Haritalar'da Aç & Takip Et</span>
-                        <ExternalLink className="w-3.5 h-3.5 opacity-80" />
-                      </a>
+                        <span>🏍️ Kortej Radarı & Takip Asistanını Tam Ekran Aç</span>
+                      </button>
                     </div>
                   );
                 }
                 return null;
               })()}
 
-              {/* Static Location Message with Google Maps Integration */}
+              {/* Static Location Message with Real Google Maps */}
               {m.type === 'location' && (() => {
                 let loc: LocationData | null = null;
                 try {
@@ -423,7 +423,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                     <div className="flex items-center justify-between px-1">
                       <span className="flex items-center gap-1 text-xs font-bold text-orange-400">
                         <MapPin className="w-3.5 h-3.5 text-orange-500" />
-                        <span>SABİT KONUM</span>
+                        <span>SABİT KONUM (GOOGLE HARİTALAR)</span>
                       </span>
                       <span className="text-[10px] text-zinc-400 font-mono">
                         {loc.lat.toFixed(4)}, {loc.lng.toFixed(4)}
@@ -510,12 +510,23 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                     </span>
                   )}
                   <button
-                      onClick={() => setReplyToMessage(m)}
-                      className="text-[12px] hover:bg-zinc-700/50 rounded-full px-1.5 py-0.5 text-orange-500"
-                      title="Yanıtla"
-                    >
-                      ↩️
-                    </button>
+                    onClick={() => setReplyToMessage(m)}
+                    className="text-[12px] hover:bg-zinc-700/50 rounded-full px-1.5 py-0.5 text-orange-500"
+                    title="Yanıtla"
+                  >
+                    ↩️
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Bu mesaj kalıcı olarak silinsin mi?')) {
+                        onDeleteMessage?.(String(m.id || `${m.sender_id}_${m.time}`));
+                      }
+                    }}
+                    className="text-[11px] hover:bg-red-950/60 rounded-full px-1.5 py-0.5 text-zinc-500 hover:text-red-400 transition"
+                    title="Mesajı Kalıcı Olarak Sil"
+                  >
+                    🗑️
+                  </button>
                 </div>
               </div>
               

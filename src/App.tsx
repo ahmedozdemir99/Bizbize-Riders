@@ -70,10 +70,36 @@ export default function App() {
   const [activeChatAvatar, setActiveChatAvatar] = useState<string>('');
 
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [deletedGroupIds, setDeletedGroupIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('rider_deleted_group_ids');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const [deletedMsgIds, setDeletedMsgIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('rider_deleted_msg_ids');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
   const [groups, setGroups] = useState<Record<string, { info: CortegeGroup }>>(() => {
     try {
       const saved = localStorage.getItem('rider_custom_groups');
-      return saved ? { ...DEFAULT_GROUPS, ...JSON.parse(saved) } : DEFAULT_GROUPS;
+      const loaded: Record<string, { info: CortegeGroup }> = saved ? { ...DEFAULT_GROUPS, ...JSON.parse(saved) } : DEFAULT_GROUPS;
+      const deleted = new Set<string>(JSON.parse(localStorage.getItem('rider_deleted_group_ids') || '[]'));
+      const filtered: Record<string, { info: CortegeGroup }> = {};
+      Object.entries(loaded).forEach(([id, g]) => {
+        if (!deleted.has(id)) {
+          filtered[id] = g;
+        }
+      });
+      return filtered;
     } catch {
       return DEFAULT_GROUPS;
     }
@@ -236,6 +262,14 @@ export default function App() {
     localStorage.setItem('rider_hidden_ids', JSON.stringify([...hiddenRiderIds]));
   }, [hiddenRiderIds]);
 
+  useEffect(() => {
+    localStorage.setItem('rider_deleted_group_ids', JSON.stringify([...deletedGroupIds]));
+  }, [deletedGroupIds]);
+
+  useEffect(() => {
+    localStorage.setItem('rider_deleted_msg_ids', JSON.stringify([...deletedMsgIds]));
+  }, [deletedMsgIds]);
+
   const registerPresence = async (name: string) => {
     const client = getSupabaseClient();
     if (!client) return;
@@ -272,8 +306,10 @@ export default function App() {
 
       if (error || !data) return;
 
+      const deleted = new Set(JSON.parse(localStorage.getItem('rider_deleted_group_ids') || '[]'));
       const newGroups: Record<string, { info: CortegeGroup }> = { ...DEFAULT_GROUPS };
       data.forEach((g: any) => {
+        if (deleted.has(g.id)) return; // Permanently deleted by user, never restore!
         newGroups[g.id] = {
           info: {
             id: g.id,
@@ -365,9 +401,20 @@ export default function App() {
     }
   }, [currentUser, activeChatId, deviceId, soundEnabled]);
 
-  // Load Messages (tries Supabase first, merges/falls back to LocalStore)
+  // Load Messages (tries Supabase first, merges/falls back to LocalStore, respects deletions)
   const loadMessages = async (groupId: string) => {
-    const localMsgs = getLocalMessages(groupId);
+    const clearedAt = Number(localStorage.getItem(`rider_cleared_at_${groupId}`) || 0);
+    const deletedMsgs = new Set(JSON.parse(localStorage.getItem('rider_deleted_msg_ids') || '[]'));
+
+    const filterValid = (m: Message) => {
+      if (clearedAt && m.time <= clearedAt) return false;
+      const key = String(m.id || `${m.sender_id}_${m.time}`);
+      if (deletedMsgs.has(key)) return false;
+      if (m.id && deletedMsgs.has(String(m.id))) return false;
+      return true;
+    };
+
+    const localMsgs = getLocalMessages(groupId).filter(filterValid);
     const client = getSupabaseClient();
     
     if (!client) {
@@ -384,10 +431,10 @@ export default function App() {
         .limit(500);
 
       if (!error && data) {
-        // Merge server and local messages cleanly by time
+        // Merge server and local messages cleanly by time, omitting deleted ones
         const map = new Map<string, Message>();
         localMsgs.forEach((m) => map.set(`${m.sender_id}_${m.time}`, m));
-        data.forEach((m: Message) => map.set(`${m.sender_id}_${m.time}`, m));
+        data.filter(filterValid).forEach((m: Message) => map.set(`${m.sender_id}_${m.time}`, m));
         const merged = Array.from(map.values()).sort((a, b) => a.time - b.time);
         setMessages(merged);
       } else {
@@ -545,7 +592,14 @@ export default function App() {
       showToast('Ortak Kortej silinemez.');
       return;
     }
-    if (!window.confirm(`"${name}" korteji silinsin mi?`)) return;
+    if (!window.confirm(`"${name}" korteji kalıcı olarak silinsin mi?`)) return;
+
+    // Permanently record in deletedGroupIds so server sync never restores it
+    setDeletedGroupIds((prev) => {
+      const next = new Set([...prev, id]);
+      localStorage.setItem('rider_deleted_group_ids', JSON.stringify([...next]));
+      return next;
+    });
 
     setGroups((prev) => {
       const copy = { ...prev };
@@ -553,13 +607,18 @@ export default function App() {
       return copy;
     });
 
+    // Also clean up local messages for this group
+    clearLocalMessages(id);
+    localStorage.removeItem(`rider_messages_${id}`);
+
     if (activeChatId === id) setActiveChatId(null);
-    showToast('Kortej silindi.');
+    showToast('Kortej kalıcı olarak silindi.');
 
     const client = getSupabaseClient();
     if (client) {
       try {
         await client.from('rider_groups').delete().eq('id', id);
+        await client.from('messages').delete().eq('group_id', id);
       } catch {}
     }
   };
@@ -880,9 +939,41 @@ export default function App() {
                   )
                 }
                 onClearMessages={() => {
+                  if (!activeChatId) return;
+                  const now = Date.now();
+                  localStorage.setItem(`rider_cleared_at_${activeChatId}`, String(now));
                   clearLocalMessages(activeChatId);
                   setMessages([]);
-                  showToast('Mesajlar temizlendi.');
+                  showToast('Tüm mesajlar kalıcı olarak temizlendi.');
+
+                  const client = getSupabaseClient();
+                  if (client) {
+                    try {
+                      client.from('messages').delete().eq('group_id', activeChatId).then();
+                    } catch {}
+                  }
+                }}
+                onDeleteMessage={(messageId) => {
+                  if (!activeChatId) return;
+                  setDeletedMsgIds((prev) => {
+                    const next = new Set([...prev, messageId]);
+                    localStorage.setItem('rider_deleted_msg_ids', JSON.stringify([...next]));
+                    return next;
+                  });
+
+                  const updated = messages.filter(
+                    (m) => String(m.id) !== messageId && `${m.sender_id}_${m.time}` !== messageId
+                  );
+                  setMessages(updated);
+                  updateLocalMessages(activeChatId, updated);
+                  showToast('Mesaj kalıcı olarak silindi.');
+
+                  const client = getSupabaseClient();
+                  if (client) {
+                    try {
+                      client.from('messages').delete().eq('id', messageId).then();
+                    } catch {}
+                  }
                 }}
                 onSendMessage={handleSendMessage}
                 onToggleAttachMenu={() => setIsAttachOpen(!isAttachOpen)}
