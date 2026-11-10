@@ -99,8 +99,8 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
       {/* Audio Backdrop Icon */}
       {(callType === 'audio' || (!remoteStream && !isGroupCall)) && (
         <div className="absolute inset-0 flex items-center justify-center flex-col gap-4 bg-gradient-to-b from-zinc-900 via-zinc-950 to-black z-10">
-          <div className="w-28 h-28 rounded-3xl bg-gradient-to-tr from-orange-600 to-orange-500 flex items-center justify-center text-5xl text-white shadow-2xl border border-white/20 animate-pulse">
-            <MotorcycleIcon className="w-14 h-14 text-white" />
+          <div className="w-32 h-32 rounded-3xl bg-gradient-to-tr from-orange-600 to-amber-500 flex items-center justify-center p-4 text-white shadow-2xl border border-white/20 animate-pulse">
+            <MotorcycleIcon className="w-full h-full text-white" />
           </div>
           <div className="font-display text-3xl font-bold text-white tracking-wide uppercase">
             {title || 'Sürücü'}

@@ -244,28 +244,11 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
 
     startGpsEngine();
 
-    // Secondary: Explicit 1-2 second continuous sampling poller
-    // Guarantees consistent (distance / time) updates every 1-2 seconds even if watchPosition throttles
-    const samplingTimer = setInterval(() => {
-      if (!isDemoModeRef.current && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          processPositionFix,
-          () => {},
-          {
-            enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 3000,
-          }
-        );
-      }
-    }, 1200);
-
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      clearInterval(samplingTimer);
     };
   }, []); // Keeps running continuously without tear-down
 
@@ -429,8 +412,14 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
     <div className="relative w-full">
       {/* GPS Diagnostics & Live Sensor Modal */}
       {showDiagModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-orange-500/50 rounded-2xl p-4 max-w-sm w-full shadow-2xl space-y-3">
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowDiagModal(false)}
+        >
+          <div 
+            className="bg-zinc-900 border border-orange-500/50 rounded-2xl p-4 max-w-sm w-full shadow-2xl space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
               <div className="flex items-center gap-2 text-orange-400">
                 <Radio className="w-5 h-5 animate-pulse" />
@@ -518,8 +507,14 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
 
       {/* Zero Distance Warning / Solution Modal */}
       {showZeroWarningModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-orange-500/50 rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowZeroWarningModal(false)}
+        >
+          <div 
+            className="bg-zinc-900 border border-orange-500/50 rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center gap-3 text-amber-400">
               <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
                 <AlertCircle className="w-6 h-6 text-amber-500" />
@@ -589,13 +584,11 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
           {/* Gauge and Live Speed Display */}
           <div className="flex items-center gap-2 min-w-0">
             <div 
-              onClick={() => setShowDiagModal(true)}
-              className={`flex items-center justify-center w-8 h-8 rounded-xl border shrink-0 transition-colors cursor-pointer ${
+              className={`flex items-center justify-center w-8 h-8 rounded-xl border shrink-0 transition-colors ${
                 speed > 0 
                   ? 'bg-orange-500/20 border-orange-500 text-orange-400 shadow-sm shadow-orange-500/30' 
                   : 'bg-zinc-900 border-zinc-800 text-zinc-400'
               }`}
-              title="GPS Canlı Sensör & Hesaplama Formülü Bilgisi"
             >
               <Gauge className={`w-4 h-4 ${speed > 0 ? 'animate-pulse text-orange-500' : ''}`} />
             </div>
@@ -610,11 +603,9 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
                 </span>
               </div>
               
-              {/* Clickable GPS status badge */}
-              <button 
-                onClick={() => setShowDiagModal(true)}
-                className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-400 hover:text-white transition text-left"
-                title="Detaylı GPS ve Hız Formülü Bilgisi"
+              {/* Clean GPS status display */}
+              <div 
+                className="flex items-center gap-1 text-[8.5px] font-mono text-zinc-400 text-left"
               >
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                   isDemoMode 
@@ -629,14 +620,12 @@ export const SpeedometerWidget: React.FC<SpeedometerWidgetProps> = ({
                   {isDemoMode 
                     ? 'Test Modu' 
                     : gpsStatus === 'active' 
-                      ? calculationMethod === 'distance_time' 
-                        ? `GPS Δd/Δt (±${gpsAccuracy || 0}m)`
-                        : `GPS (±${gpsAccuracy || 0}m)` 
+                      ? `GPS (±${gpsAccuracy || 0}m)` 
                       : gpsStatus === 'denied'
                         ? 'İzin Ver'
                         : 'Uydu Aranıyor'}
                 </span>
-              </button>
+              </div>
             </div>
           </div>
 

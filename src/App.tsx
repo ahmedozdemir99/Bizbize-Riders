@@ -1104,24 +1104,26 @@ export default function App() {
         onClose={() => setIsRoadAlertOpen(false)}
         onSendAlert={(alert) => handleSendMessage('text', alert)}
       />
-      <VoiceAssistantModal
-        isOpen={isVoiceAssistantOpen}
-        onClose={() => setIsVoiceAssistantOpen(false)}
-        activeChatId={activeChatId}
-        activeChatName={activeChatName}
-        onSendMessage={(text) => handleSendMessage('text', text)}
-        onOpenGroupMap={() => setIsGroupMapOpen(true)}
-        onOpenRoadAlert={() => setIsRoadAlertOpen(true)}
-        onOpenRiders={() => setIsRidersOpen(true)}
-        onBackToChatList={() => setActiveChatId(null)}
-        onToggleSound={() => setSoundEnabled(!soundEnabled)}
-        soundEnabled={soundEnabled}
-        onStartCall={(type) => {
-          if (activeChatId) {
-            handleStartCall({ id: activeChatId, name: activeChatName }, type);
-          }
-        }}
-      />
+      {isVoiceAssistantOpen && (
+        <VoiceAssistantModal
+          isOpen={isVoiceAssistantOpen}
+          onClose={() => setIsVoiceAssistantOpen(false)}
+          activeChatId={activeChatId}
+          activeChatName={activeChatName}
+          onSendMessage={(text) => handleSendMessage('text', text)}
+          onOpenGroupMap={() => setIsGroupMapOpen(true)}
+          onOpenRoadAlert={() => setIsRoadAlertOpen(true)}
+          onOpenRiders={() => setIsRidersOpen(true)}
+          onBackToChatList={() => setActiveChatId(null)}
+          onToggleSound={() => setSoundEnabled(!soundEnabled)}
+          soundEnabled={soundEnabled}
+          onStartCall={(type) => {
+            if (activeChatId) {
+              handleStartCall({ id: activeChatId, name: activeChatName }, type);
+            }
+          }}
+        />
+      )}
 
       {/* Toast Notification Banner */}
       {toastMsg && (

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Mic, MicOff, Volume2, Sparkles, Check, HelpCircle, Radio } from 'lucide-react';
+import { X, Mic, MicOff, Volume2, Sparkles, Radio } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -38,12 +38,18 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
   onStartCall,
 }) => {
   const [isListening, setIsListening] = useState(false);
-  const [continuousMode, setContinuousMode] = useState(true);
+  // Default continuous helmet mode to FALSE so mic does not stay open unintentionally
+  const [continuousMode, setContinuousMode] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const recognitionRef = useRef<any>(null);
+  const isStoppingRef = useRef(false);
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+  const continuousModeRef = useRef(continuousMode);
+  continuousModeRef.current = continuousMode;
 
   // Text to Speech Voice Feedback (Turkish)
   const speakFeedback = (text: string) => {
@@ -79,7 +85,6 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         .trim();
 
       if (msg) {
-        // Capitalize first letter
         msg = msg.charAt(0).toUpperCase() + msg.slice(1);
         if (activeChatId) {
           onSendMessage(msg);
@@ -99,7 +104,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         onOpenGroupMap();
         setLastAction('Kortej canlı haritası açıldı.');
         speakFeedback('Kortej haritası açılıyor.');
-        onClose();
+        handleSafeClose();
       } else {
         setLastAction('Kortej haritası yalnızca grup sohbetinde açılabilir.');
         speakFeedback('Harita için bir kortej grubunda olmalısınız.');
@@ -112,7 +117,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       onOpenRoadAlert();
       setLastAction('Yol ikazı menüsü açıldı.');
       speakFeedback('Yol ikazı açılıyor.');
-      onClose();
+      handleSafeClose();
       return;
     }
 
@@ -121,7 +126,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       onOpenRiders();
       setLastAction('Riders dizini açıldı.');
       speakFeedback('Sürücüler listesi açılıyor.');
-      onClose();
+      handleSafeClose();
       return;
     }
 
@@ -140,7 +145,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         onStartCall('audio');
         setLastAction('Sesli arama başlatılıyor.');
         speakFeedback('Sesli arama başlatılıyor.');
-        onClose();
+        handleSafeClose();
       } else {
         setLastAction('Arama başlatmak için bir sohbet seçin.');
         speakFeedback('Arama için bir kişi veya grup seçmelisiniz.');
@@ -154,9 +159,9 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         onBackToChatList();
         setLastAction('Sohbet listesine dönüldü.');
         speakFeedback('Ana listeye dönüldü.');
-        onClose();
+        handleSafeClose();
       } else {
-        onClose();
+        handleSafeClose();
       }
       return;
     }
@@ -179,6 +184,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
   const startListening = () => {
     setErrorMsg(null);
+    isStoppingRef.current = false;
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
       setErrorMsg('Tarayıcınız Web Speech API ses tanıma özelliğini desteklemiyor.');
@@ -186,13 +192,11 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     }
 
     try {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
+      stopListening();
 
       const rec = new SpeechRec();
       rec.lang = 'tr-TR';
-      rec.continuous = continuousMode;
+      rec.continuous = continuousModeRef.current;
       rec.interimResults = false;
       rec.maxAlternatives = 1;
 
@@ -213,14 +217,14 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         if (event.error === 'no-speech') return;
         if (event.error === 'not-allowed') {
           setErrorMsg('Mikrofon erişim izni verilmedi.');
-          setIsListening(false);
+          stopListening();
           return;
         }
       };
 
       rec.onend = () => {
-        if (continuousMode && isOpen) {
-          // Restart listening for continuous motorcycle helmet hands-free mode
+        // Only restart if explicitly in continuous helmet mode AND modal is open AND not stopping!
+        if (!isStoppingRef.current && isOpenRef.current && continuousModeRef.current) {
           try {
             rec.start();
           } catch {
@@ -241,35 +245,66 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
   };
 
   const stopListening = () => {
+    isStoppingRef.current = true;
     if (recognitionRef.current) {
-      recognitionRef.current.abort();
+      const rec = recognitionRef.current;
       recognitionRef.current = null;
+      // CRITICAL: Clear listeners before abort to prevent automatic restart loop
+      rec.onend = null;
+      rec.onerror = null;
+      rec.onresult = null;
+      rec.onstart = null;
+      try {
+        rec.abort();
+      } catch {}
     }
     setIsListening(false);
   };
 
-  // Start listening on modal open
+  const handleSafeClose = () => {
+    stopListening();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    onClose();
+  };
+
+  // Lifecycle control: stop listening when closed or unmounted
   useEffect(() => {
     if (isOpen) {
+      // When opened, start listening once
       startListening();
     } else {
       stopListening();
     }
     return () => {
       stopListening();
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
     };
-  }, [isOpen, continuousMode]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4">
+    <div 
+      className="fixed inset-0 bg-black/85 z-[100] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={handleSafeClose}
+    >
+      <div 
+        className="bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-sm p-5 shadow-2xl flex flex-col gap-4"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex justify-between items-center border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-orange-600/20 border border-orange-500/40 text-orange-500 flex items-center justify-center">
-              <Radio className="w-4 h-4 animate-pulse" />
+              <Radio className={`w-4 h-4 ${isListening ? 'animate-pulse text-orange-400' : ''}`} />
             </div>
             <div>
               <h3 className="font-display font-bold text-base text-white uppercase tracking-wider">
@@ -279,7 +314,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
             </div>
           </div>
           <button 
-            onClick={onClose} 
+            onClick={handleSafeClose} 
             className="w-8 h-8 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white flex items-center justify-center transition"
           >
             <X className="w-5 h-5" />
@@ -330,9 +365,19 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
         {/* Continuous Mode Toggle */}
         <div className="flex items-center justify-between px-3 py-2 bg-zinc-950/40 rounded-xl border border-zinc-800/60 text-xs">
-          <span className="text-zinc-300 font-medium">Sürekli Dinleme (Sürüş Modu)</span>
+          <div>
+            <span className="text-zinc-300 font-medium block">Sürekli Dinleme (Kask Modu)</span>
+            <span className="text-[10px] text-zinc-500">Açıkken komutları durmaksızın bekler</span>
+          </div>
           <button
-            onClick={() => setContinuousMode(!continuousMode)}
+            onClick={() => {
+              const nextMode = !continuousMode;
+              setContinuousMode(nextMode);
+              continuousModeRef.current = nextMode;
+              if (isListening) {
+                startListening();
+              }
+            }}
             className={`w-10 h-6 rounded-full p-1 transition ${
               continuousMode ? 'bg-orange-600' : 'bg-zinc-700'
             }`}
