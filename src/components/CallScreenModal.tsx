@@ -1,7 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import { CallType } from '../types';
 import { MotorcycleIcon } from './MotorcycleIcon';
+
+// Mobile browsers may block unmuted autoplay even after a call was accepted.
+function RemoteMedia({ stream, audioOnly = false }: { stream: MediaStream; audioOnly?: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [blocked, setBlocked] = useState(false);
+  const play = () => {
+    const media = ref.current;
+    if (!media) return;
+    void media.play().then(() => setBlocked(false)).catch(() => setBlocked(true));
+  };
+  useEffect(() => {
+    const media = ref.current;
+    if (!media) return;
+    media.srcObject = stream;
+    play();
+    return () => { media.pause(); media.srcObject = null; };
+  }, [stream]);
+  return <>
+    <video ref={ref} autoPlay playsInline className={audioOnly ? 'absolute w-px h-px opacity-0' : 'w-full h-full object-cover bg-zinc-950'} />
+    {blocked && <button onClick={play} className="absolute top-24 left-4 z-40 rounded-xl bg-orange-600 p-3 text-white font-bold">
+      Sesi ve görüntüyü aç
+    </button>}
+  </>;
+}
 
 interface CallScreenModalProps {
   isOpen: boolean;
@@ -29,6 +53,11 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isVideoDisabled, setIsVideoDisabled] = useState(false);
 
+  useEffect(() => {
+    setIsMicMuted(false);
+    setIsVideoDisabled(false);
+  }, [localStream]);
+
   if (!isOpen) return null;
 
   const toggleMic = () => {
@@ -51,19 +80,7 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[700] bg-black flex flex-col items-center justify-center overflow-hidden">
-      {/* 1-on-1 Video Stream */}
-      {!isGroupCall && callType === 'video' && remoteStream && (
-        <video
-          ref={(node) => {
-            if (node && node.srcObject !== remoteStream) {
-              node.srcObject = remoteStream;
-            }
-          }}
-          autoPlay
-          playsInline
-          className="w-full h-full object-cover bg-zinc-950"
-        />
-      )}
+      {!isGroupCall && remoteStream && <RemoteMedia stream={remoteStream} audioOnly={callType === 'audio'} />}
 
       {/* Group Call Remote Video Grid */}
       {isGroupCall && (
@@ -73,16 +90,7 @@ export const CallScreenModal: React.FC<CallScreenModalProps> = ({
               key={id}
               className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-white/10 min-h-[140px] shadow-lg flex items-center justify-center"
             >
-              <video
-                ref={(node) => {
-                  if (node && node.srcObject !== info.stream) {
-                    node.srcObject = info.stream;
-                  }
-                }}
-                autoPlay
-                playsInline
-                className="w-full h-full min-h-[140px] object-cover"
-              />
+              <RemoteMedia stream={info.stream} audioOnly={callType === 'audio'} />
               <div className="absolute bottom-2 left-2 right-2 text-xs font-bold text-white bg-black/70 backdrop-blur-sm rounded-lg px-2 py-1 truncate">
                 {info.name || 'Rider'}
               </div>

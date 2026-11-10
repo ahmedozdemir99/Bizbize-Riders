@@ -15,8 +15,12 @@ import {
   setUsername, 
   initSupabase 
 } from './services/supabase';
+import { GroupCall } from './services/groupCall';
+import { CallConnection, resolveRiderId } from './services/callConnection';
 import { soundEffects } from './services/sound';
 import { 
+  mergeMessages,
+  unpersistedChats,
   getLocalMessages, 
   saveLocalMessage, 
   updateLocalMessages,
@@ -181,7 +185,13 @@ export default function App() {
     Record<string, { name: string; stream: MediaStream }>
   >({});
 
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const groupCallRef = useRef<GroupCall | null>(null);
+  const preparingCallRef = useRef(false);
+  const dismissedGroupCallsRef = useRef(new Set<string>());
+  const callSessionRef = useRef<{ id: string; peer: string; connection: CallConnection; stream: MediaStream } | null>(null);
+  const activeChatRef = useRef(activeChatId);
+  activeChatRef.current = activeChatId;
+  const messageLoadRef = useRef(0);
 
   // Toast state
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -391,7 +401,7 @@ export default function App() {
             if (!c) return;
 
             // Incoming call for this device
-            if (c.callee_id === deviceId && c.status === 'ringing') {
+            if (c.callee_id === deviceId && c.status === 'ringing' && !preparingCallRef.current && !callSessionRef.current && !groupCallRef.current) {
               setPendingCall(c);
               if (soundEnabled) soundEffects.ringTone();
               if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -407,18 +417,11 @@ export default function App() {
               }
             }
 
-            // Caller receives answer or rejection
-            if (activeCallId && c.id === activeCallId) {
-              if (c.status === 'connected' && c.answer && peerConnectionRef.current) {
-                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
-                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(c.answer));
-                  setCallStatusText('Bağlandı');
-                }
-              } else if (c.status === 'rejected') {
-                showToast('Arama meşgul / reddedildi.');
-                handleEndCall();
-              } else if (c.status === 'ended') {
-                showToast('Arama sonlandı.');
+            const session = callSessionRef.current;
+            if (session && c.id === session.id) {
+              if (c.status === 'connected' && c.answer) {
+                await session.connection.receive('answer', c.answer);
+              } else if (c.status === 'rejected' || c.status === 'ended') {
                 handleEndCall();
               }
             }
@@ -429,20 +432,10 @@ export default function App() {
           { event: 'INSERT', schema: 'public', table: 'call_signals' },
           async (payload: any) => {
             const sig = payload.new;
-            if (!sig || sig.to_id !== deviceId) return;
-
-            if (sig.kind === 'ice' && sig.payload && peerConnectionRef.current) {
-              try {
-                await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(sig.payload));
-              } catch {}
-            } else if (sig.kind === 'answer' && sig.payload && peerConnectionRef.current) {
-              try {
-                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
-                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(sig.payload));
-                  setCallStatusText('Bağlandı');
-                }
-              } catch {}
-            }
+            const session = callSessionRef.current;
+            if (!session || !sig || sig.to_id !== deviceId || sig.from_id !== session.peer || sig.call_id !== session.id) return;
+            try { await session.connection.receive(sig.kind, sig.payload); }
+            catch (error) { console.warn('Call signaling:', error); }
           }
         )
         .on(
@@ -451,7 +444,7 @@ export default function App() {
           (payload: any) => {
             const gcall: GroupCallRecord = payload.new;
             const callerId = gcall?.caller_id || gcall?.host_id;
-            if (gcall && callerId !== deviceId && (gcall.status === 'active' || gcall.status === 'ringing')) {
+            if (!preparingCallRef.current && !callSessionRef.current && !groupCallRef.current && gcall && callerId !== deviceId && (gcall.status === 'active' || gcall.status === 'ringing')) {
               setPendingGroupCall(gcall);
               if (soundEnabled) soundEffects.ringTone();
             }
@@ -474,7 +467,7 @@ export default function App() {
             .order('created_at', { ascending: false })
             .limit(1);
 
-          if (incoming && incoming.length > 0) {
+          if (!preparingCallRef.current && !callSessionRef.current && !groupCallRef.current && incoming && incoming.length > 0) {
             const inc = incoming[0];
             setPendingCall((prev) => {
               if (!prev || prev.id !== inc.id) {
@@ -489,14 +482,15 @@ export default function App() {
           const { data: gcalls } = await client
             .from('group_calls')
             .select('*')
-            .neq('caller_id', deviceId)
+            .neq('host_id', deviceId)
             .eq('status', 'active')
             .gte('created_at', cutoff)
             .order('created_at', { ascending: false })
             .limit(1);
 
-          if (gcalls && gcalls.length > 0) {
+          if (!preparingCallRef.current && !callSessionRef.current && !groupCallRef.current && gcalls && gcalls.length > 0) {
             const gc = gcalls[0];
+            if (dismissedGroupCallsRef.current.has(gc.id)) return;
             setPendingGroupCall((prev) => {
               if (!prev || prev.id !== gc.id) {
                 if (soundEnabled) soundEffects.ringTone();
@@ -506,29 +500,19 @@ export default function App() {
             });
           }
 
-          // 3. If caller waiting for callee to answer
-          if (activeCallId && peerConnectionRef.current) {
-            const { data: stateData } = await client
-              .from('calls')
-              .select('*')
-              .eq('id', activeCallId)
-              .limit(1);
-
-            if (stateData && stateData.length > 0) {
-              const cs = stateData[0];
-              if (cs.status === 'connected' && cs.answer) {
-                if (peerConnectionRef.current.signalingState === 'have-local-offer') {
-                  await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(cs.answer));
-                  setCallStatusText('Bağlandı');
-                }
-              } else if (cs.status === 'rejected') {
-                showToast('Arama meşgul / reddedildi.');
-                handleEndCall();
-              } else if (cs.status === 'ended' && isCallModalOpen) {
-                showToast('Arama sonlandırıldı.');
-                handleEndCall();
-              }
-            }
+          // Replay persisted signaling as well as realtime events: candidates can arrive
+          // while the receiver is granting microphone permission or changing channels.
+          const session = callSessionRef.current;
+          if (session) {
+            const { data: stateData } = await client.from('calls').select('*').eq('id', session.id).limit(1);
+            if (callSessionRef.current !== session) return;
+            const state = stateData?.[0];
+            if (state?.status === 'ended' || state?.status === 'rejected') { handleEndCall(); return; }
+            if (state?.answer) await session.connection.receive('answer', state.answer);
+            const { data: signals } = await client.from('call_signals').select('*')
+              .eq('call_id', session.id).eq('to_id', deviceId).eq('from_id', session.peer).order('id');
+            if (callSessionRef.current !== session) return;
+            for (const signal of signals || []) await session.connection.receive(signal.kind, signal.payload);
           }
         } catch {}
       }, 2500);
@@ -543,49 +527,36 @@ export default function App() {
     }
   }, [currentUser, activeChatId, deviceId, soundEnabled, activeCallId, isCallModalOpen]);
 
-  // Load Messages (tries Supabase first, merges/falls back to LocalStore, respects deletions)
+  // Publish local messages immediately; merge server responses with the current cache,
+  // never a snapshot taken before a newer send or a chat switch.
   const loadMessages = async (groupId: string) => {
-    const clearedAt = Number(localStorage.getItem(`rider_cleared_at_${groupId}`) || 0);
-    const deletedMsgs = new Set(JSON.parse(localStorage.getItem('rider_deleted_msg_ids') || '[]'));
-
-    const filterValid = (m: Message) => {
-      if (clearedAt && m.time <= clearedAt) return false;
-      const key = String(m.id || `${m.sender_id}_${m.time}`);
-      if (deletedMsgs.has(key)) return false;
-      if (m.id && deletedMsgs.has(String(m.id))) return false;
-      return true;
+    const request = ++messageLoadRef.current;
+    const valid = (m: Message) => {
+      const clearedAt = Number(localStorage.getItem(`rider_cleared_at_${groupId}`) || 0);
+      let deleted: string[] = [];
+      try { deleted = JSON.parse(localStorage.getItem('rider_deleted_msg_ids') || '[]'); } catch {}
+      return (!clearedAt || m.time > clearedAt) && !m.deleted &&
+        !deleted.includes(String(m.id)) && !deleted.includes(`${m.sender_id}_${m.time}`);
     };
-
-    const localMsgs = getLocalMessages(groupId).filter(filterValid);
+    if (activeChatRef.current === groupId) setMessages(getLocalMessages(groupId).filter(valid));
     const client = getSupabaseClient();
-    
-    if (!client) {
-      setMessages(localMsgs);
-      return;
-    }
-
+    if (!client) return;
     try {
-      const { data, error } = await client
-        .from('messages')
-        .select('*')
-        .eq('group_id', groupId)
-        .order('time', { ascending: true })
-        .limit(500);
-
-      if (!error && data) {
-        // Merge server and local messages cleanly by time, omitting deleted ones
-        const map = new Map<string, Message>();
-        localMsgs.forEach((m) => map.set(`${m.sender_id}_${m.time}`, m));
-        data.filter(filterValid).forEach((m: Message) => map.set(`${m.sender_id}_${m.time}`, m));
-        const merged = Array.from(map.values()).sort((a, b) => a.time - b.time);
-        setMessages(merged);
-      } else {
-        setMessages(localMsgs);
-      }
-    } catch (e) {
-      setMessages(localMsgs);
-    }
+      const { data, error } = await client.from('messages').select('*')
+        .eq('group_id', groupId).order('time', { ascending: false }).limit(500);
+      if (error || request !== messageLoadRef.current || activeChatRef.current !== groupId) return;
+      const merged = mergeMessages(getLocalMessages(groupId), data || []).filter(valid);
+      updateLocalMessages(groupId, merged);
+      setMessages(merged);
+    } catch { /* The optimistic local view remains visible. */ }
   };
+
+  useEffect(() => {
+    if (!activeChatId || !currentUser) return;
+    void loadMessages(activeChatId);
+    const timer = window.setInterval(() => void loadMessages(activeChatId), 4000);
+    return () => clearInterval(timer);
+  }, [activeChatId, currentUser]);
 
   const handleLogin = (name: string) => {
     setUsername(name);
@@ -620,6 +591,7 @@ export default function App() {
         setDmContacts((prev) => ({ ...prev, [id]: { id: rider.id, name, avatar } }));
       }
     }
+    activeChatRef.current = id;
     setActiveChatId(id);
     setActiveChatName(name);
     setActiveChatAvatar(avatar);
@@ -635,7 +607,7 @@ export default function App() {
   ) => {
     if (!activeChatId || !currentUser) return;
 
-    const directRecipient = activeChatId.startsWith('dm_') ? dmContacts[activeChatId]?.id : null;
+    const directRecipient = activeChatId.startsWith('dm_') ? resolveRiderId(activeChatId, deviceId, dmContacts[activeChatId]?.id) : null;
 
     const row: Message = {
       group_id: activeChatId,
@@ -653,8 +625,9 @@ export default function App() {
     };
 
     // Always persist to local store first
-    saveLocalMessage(activeChatId, row);
-    loadMessages(activeChatId);
+    const updated = saveLocalMessage(activeChatId, row);
+    setMessages(updated);
+    if (unpersistedChats.has(activeChatId)) showToast('Cihaz hafızası dolu. Mesaj bu oturumda tutuluyor; sunucuya gönderiliyor.');
     if (soundEnabled) soundEffects.click();
 
     // Try background insert to Supabase if connected
@@ -675,13 +648,15 @@ export default function App() {
         };
         if (replyToId) payload.reply_to_id = replyToId;
 
-        const { error } = await client.from('messages').insert([payload]);
-        if (error && payload.reply_to_id) {
+        let { error } = await client.from('messages').insert([payload]);
+        if (error?.code === 'PGRST204' && payload.reply_to_id) {
           // If the remote table doesn't have reply_to_id column, retry insert without it
           delete payload.reply_to_id;
-          await client.from('messages').insert([payload]);
+          ({ error } = await client.from('messages').insert([payload]));
         }
+        if (error) showToast((unpersistedChats.has(row.group_id) ? 'Mesaj yalnızca bu oturumda tutuluyor; hafıza dolu. Gönderilemedi: ' : 'Mesaj cihazda saklandı, karşı tarafa gönderilemedi: ') + error.message);
       } catch (err) {
+        showToast(unpersistedChats.has(row.group_id) ? 'Cihaz hafızası dolu ve sunucu bağlantısı yok. Mesaj yalnızca bu oturumda tutuluyor.' : 'Mesaj cihazda saklandı. Sunucu bağlantısı kurulamadı.');
         console.warn('Supabase message insert background fallback:', err);
       }
     }
@@ -796,321 +771,157 @@ export default function App() {
     showToast('Gizlenen Rider kayıtları geri getirildi.');
   };
 
-  // WebRTC 1-on-1 Call Start
-  const handleStartCall = async (target: { id: string; name: string }, type: 'audio' | 'video') => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast('Arama için kamera/mikrofon ve HTTPS izni gereklidir.');
-      return;
-    }
+  useEffect(() => () => {
+    const session = callSessionRef.current;
+    callSessionRef.current = null;
+    session?.connection.close();
+    session?.stream.getTracks().forEach(track => track.stop());
+    groupCallRef.current?.close();
+    groupCallRef.current = null;
+  }, []);
 
-    // Resolve true targetId (in case a dm_ id was passed)
-    let targetId = target.id;
-    if (targetId.startsWith('dm_')) {
-      const parts = targetId.replace('dm_', '').split('_');
-      targetId = parts.find((p) => p !== deviceId) || parts[0];
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: type === 'video' ? {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 24 }
-        } : false,
-      });
-
-      setLocalStream(stream);
-      setCallType(type);
-      setCallTitle(target.name);
-      setCallStatusText('Aranıyor...');
-      setIsGroupCall(false);
-      setIsCallModalOpen(true);
-
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ],
-      });
-      peerConnectionRef.current = pc;
-
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-
-      pc.ontrack = (e) => {
-        if (e.streams[0]) {
-          setRemoteStream(e.streams[0]);
-          setCallStatusText('Bağlandı');
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'connected') {
-          setCallStatusText('Bağlandı');
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          setCallStatusText('Arama sonlandı');
-          setTimeout(() => handleEndCall(), 1500);
-        }
-      };
-
-      const callId = 'call_' + Date.now();
-      setActiveCallId(callId);
-
-      // Exchange ICE candidates through call_signals table
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          const client = getSupabaseClient();
-          if (client) {
-            client.from('call_signals').insert([
-              {
-                call_id: callId,
-                from_id: deviceId,
-                to_id: targetId,
-                kind: 'ice',
-                payload: event.candidate.toJSON(),
-              },
-            ]).then();
-          }
-        }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      const newRecord: CallRecord = {
-        id: callId,
-        caller_id: deviceId,
-        caller_name: currentUser,
-        callee_id: targetId,
-        callee_name: target.name,
-        type,
-        status: 'ringing',
-        created_at: new Date().toISOString(),
-      };
-      setCallHistory((prev) => [newRecord, ...prev]);
-
-      const client = getSupabaseClient();
-      if (client) {
-        try {
-          await client.from('calls').insert([
-            {
-              ...newRecord,
-              offer: { type: offer.type, sdp: offer.sdp },
-            },
-          ]);
-        } catch (e) {
-          console.warn('Call insert error:', e);
-        }
-      }
-    } catch (err: any) {
-      showToast('Arama başlatılamadı: ' + err.message);
-      handleEndCall();
-    }
+  const createCallSession = (id: string, peer: string, stream: MediaStream) => {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Arama için veritabanı bağlantısı gerekli.');
+    const connection = new CallConnection(stream, setRemoteStream, state => {
+      if (callSessionRef.current?.id !== id) return;
+      if (state === 'connected') setCallStatusText('Bağlandı');
+      if (state === 'disconnected') setCallStatusText('Bağlantı yeniden kuruluyor...');
+      if (state === 'failed') setCallStatusText('Bağlantı kurulamadı. Farklı ağlarda TURN sunucusu gerekebilir.');
+    }, async candidate => {
+      const { error } = await client.from('call_signals').insert({ call_id: id, from_id: deviceId,
+        to_id: peer, kind: 'ice', payload: candidate });
+      if (error) throw error;
+    });
+    callSessionRef.current = { id, peer, connection, stream };
+    return connection;
   };
 
-  const handleStartGroupCall = async (groupId: string, groupName: string, type: 'audio' | 'video') => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast('Arama için kamera/mikrofon ve HTTPS izni gereklidir.');
-      return;
-    }
-
+  const handleStartCall = async (target: { id: string; name: string }, type: 'audio' | 'video') => {
+    if (callSessionRef.current || isCallModalOpen) return showToast('Önce mevcut aramayı sonlandırın.');
+    if (!navigator.mediaDevices?.getUserMedia) return showToast('Arama için HTTPS ve mikrofon/kamera izni gerekli.');
+    const targetId = resolveRiderId(target.id, deviceId, dmContacts[target.id]?.id);
+    if (!targetId) return showToast('Sürücü kimliği bulunamadı. Rehberden tekrar seçin.');
+    if (preparingCallRef.current) return;
+    preparingCallRef.current = true;
+    let stream: MediaStream | undefined;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: type === 'video' ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
-      });
-
-      setLocalStream(stream);
-      setCallType(type);
-      setCallTitle(`${groupName} (Kortej Telsizi)`);
-      setCallStatusText('Kortej Telsizi Aktif');
-      setIsGroupCall(true);
-      setIsCallModalOpen(true);
-
-      const gcallId = 'gcall_' + Date.now();
-      setActiveCallId(gcallId);
-
       const client = getSupabaseClient();
-      if (client) {
-        try {
-          await client.from('group_calls').insert([
-            {
-              id: gcallId,
-              title: groupName,
-              group_id: groupId,
-              caller_id: deviceId,
-              caller_name: currentUser,
-              type,
-              status: 'active',
-              created_at: new Date().toISOString(),
-            },
-          ]);
-        } catch {}
-      }
+      if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true },
+        video: type === 'video' ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false });
+      const callId = 'call_' + crypto.randomUUID();
+      const connection = createCallSession(callId, targetId, stream);
+      setLocalStream(stream); setRemoteStream(null); setCallType(type); setCallTitle(target.name);
+      setCallStatusText('Aranıyor...'); setIsGroupCall(false); setIsCallModalOpen(true); setActiveCallId(callId);
+      const offer = await connection.offer();
+      const record: CallRecord = { id: callId, caller_id: deviceId, caller_name: currentUser,
+        callee_id: targetId, callee_name: target.name, type, status: 'ringing', created_at: new Date().toISOString(), offer };
+      const { error } = await client.from('calls').insert(record);
+      if (error) throw error;
+      setCallHistory(prev => [record, ...prev]);
+    } catch (error: any) {
+      stream?.getTracks().forEach(track => track.stop());
+      handleEndCall(); showToast('Arama başlatılamadı: ' + error.message);
+    } finally { preparingCallRef.current = false; }
+  };
 
-      showToast('Kortej telsiz araması başlatıldı. Sürücüler bağlanabilir.');
-    } catch (err: any) {
-      showToast('Grup araması başlatılamadı: ' + err.message);
-      handleEndCall();
-    }
+  const openGroupCall = async (call: GroupCallRecord, stream: MediaStream) => {
+    const client = getSupabaseClient();
+    if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
+    setLocalStream(stream); setRemoteStream(null); setGroupRemoteStreams({});
+    setCallType(call.type); setCallTitle(`${call.title} (Kortej Telsizi)`);
+    setCallStatusText('Sürücüler bekleniyor...'); setIsGroupCall(true);
+    setIsCallModalOpen(true); setActiveCallId(call.id);
+    const session = new GroupCall(client, call.id, deviceId, currentUser, stream,
+      call.host_id || call.caller_id || '', (id, name, remote) => {
+        setGroupRemoteStreams(prev => {
+          const next = { ...prev };
+          if (remote) next[id] = { name, stream: remote }; else delete next[id];
+          return next;
+        });
+      }, () => handleEndCall(), error => {
+        console.error('Group call:', error); setCallStatusText('Kortej bağlantısı kurulamadı. Veritabanı ayarlarını kontrol edin.');
+      });
+    groupCallRef.current = session;
+    await session.start();
+  };
+
+  const handleStartGroupCall = async (_groupId: string, groupName: string, type: 'audio' | 'video') => {
+    if (callSessionRef.current || groupCallRef.current) return;
+    if (preparingCallRef.current) return;
+    preparingCallRef.current = true;
+    let stream: MediaStream | undefined;
+    try {
+      const client = getSupabaseClient();
+      if (!client) throw new Error('Veritabanı bağlantısı gerekli.');
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+      const call: GroupCallRecord = { id: 'gcall_' + crypto.randomUUID(), title: groupName,
+        host_id: deviceId, host_name: currentUser, type, status: 'active', created_at: new Date().toISOString() };
+      const { error } = await client.from('group_calls').insert(call);
+      if (error) throw error;
+      await openGroupCall(call, stream);
+    } catch (error: any) {
+      stream?.getTracks().forEach(track => track.stop());
+      handleEndCall(); showToast('Grup araması başlatılamadı: ' + error.message);
+    } finally { preparingCallRef.current = false; }
   };
 
   const handleJoinGroupCall = async () => {
-    if (!pendingGroupCall) return;
-    const gcall = pendingGroupCall;
-    setPendingGroupCall(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast('Arama için kamera/mikrofon ve HTTPS izni gereklidir.');
-      return;
-    }
+    if (!pendingGroupCall || callSessionRef.current || groupCallRef.current) return;
+    const call = pendingGroupCall; setPendingGroupCall(null);
+    if (preparingCallRef.current) return;
+    preparingCallRef.current = true;
+    let stream: MediaStream | undefined;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: gcall.type === 'video' ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
-      });
-
-      setLocalStream(stream);
-      setCallType(gcall.type);
-      setCallTitle(`${gcall.title} (Kortej Telsizi)`);
-      setCallStatusText('Korteje Bağlandı');
-      setIsGroupCall(true);
-      setActiveCallId(gcall.id);
-      setIsCallModalOpen(true);
-      showToast('Kortej telsiz görüşmesine katıldınız.');
-    } catch (err: any) {
-      showToast('Grup aramasına katılınamadı: ' + err.message);
-    }
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: call.type === 'video' });
+      await openGroupCall(call, stream);
+    } catch (error: any) {
+      stream?.getTracks().forEach(track => track.stop());
+      handleEndCall(); showToast('Grup aramasına katılınamadı: ' + error.message);
+    } finally { preparingCallRef.current = false; }
   };
 
   const handleEndCall = () => {
-    if (activeCallId) {
-      const client = getSupabaseClient();
-      if (client) {
-        client.from('calls').update({ status: 'ended' }).eq('id', activeCallId).then();
-      }
-    }
-    if (localStream) {
-      localStream.getTracks().forEach((t) => t.stop());
-      setLocalStream(null);
-    }
-    if (remoteStream) {
-      setRemoteStream(null);
-    }
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    setIsCallModalOpen(false);
-    setActiveCallId(null);
-    setIsGroupCall(false);
+    const group = groupCallRef.current;
+    if (group) dismissedGroupCallsRef.current.add(group.roomId);
+    groupCallRef.current = null;
+    group?.close();
+    const session = callSessionRef.current;
+    callSessionRef.current = null;
+    session?.connection.close();
+    session?.stream.getTracks().forEach(track => track.stop());
+    const client = getSupabaseClient();
+    const id = session?.id;
+    if (id && client) void client.from('calls')
+      .update({ status: 'ended' }).eq('id', id).then();
+    localStream?.getTracks().forEach(track => track.stop());
+    setLocalStream(null); setRemoteStream(null); setGroupRemoteStreams({});
+    setIsCallModalOpen(false); setActiveCallId(null); setIsGroupCall(false);
   };
 
   const handleAcceptIncomingCall = async () => {
-    if (!pendingCall) return;
+    if (!pendingCall || callSessionRef.current) return;
     const call = pendingCall;
     setPendingCall(null);
-
+    if (preparingCallRef.current) return;
+    preparingCallRef.current = true;
+    let stream: MediaStream | undefined;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: call.type === 'video' ? {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 24 }
-        } : false,
-      });
-
-      setLocalStream(stream);
-      setCallType(call.type);
-      setCallTitle(call.caller_name);
-      setCallStatusText('Bağlanıyor...');
-      setIsCallModalOpen(true);
-      setActiveCallId(call.id);
-
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ],
-      });
-      peerConnectionRef.current = pc;
-
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-
-      pc.ontrack = (e) => {
-        if (e.streams[0]) {
-          setRemoteStream(e.streams[0]);
-          setCallStatusText('Bağlandı');
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'connected') {
-          setCallStatusText('Bağlandı');
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          setCallStatusText('Arama sonlandı');
-          setTimeout(() => handleEndCall(), 1500);
-        }
-      };
-
-      // Exchange ICE candidates through call_signals table
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          const client = getSupabaseClient();
-          if (client) {
-            client.from('call_signals').insert([
-              {
-                call_id: call.id,
-                from_id: deviceId,
-                to_id: call.caller_id,
-                kind: 'ice',
-                payload: event.candidate.toJSON(),
-              },
-            ]).then();
-          }
-        }
-      };
-
-      if (call.offer) {
-        await pc.setRemoteDescription(new RTCSessionDescription(call.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        const client = getSupabaseClient();
-        if (client) {
-          try {
-            await client
-              .from('calls')
-              .update({ status: 'connected', answer: { type: answer.type, sdp: answer.sdp } })
-              .eq('id', call.id);
-
-            // Also signal answer explicitly
-            await client.from('call_signals').insert([
-              {
-                call_id: call.id,
-                from_id: deviceId,
-                to_id: call.caller_id,
-                kind: 'answer',
-                payload: { type: answer.type, sdp: answer.sdp },
-              },
-            ]);
-          } catch {}
-        }
-      }
-    } catch (e: any) {
-      showToast('Arama kabul edilemedi: ' + e.message);
-      handleEndCall();
-    }
+      const client = getSupabaseClient();
+      if (!client || !call.offer) throw new Error('Arama teklifi veya veritabanı bağlantısı yok.');
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true },
+        video: call.type === 'video' ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false });
+      const connection = createCallSession(call.id, call.caller_id, stream);
+      setLocalStream(stream); setRemoteStream(null); setCallType(call.type); setCallTitle(call.caller_name);
+      setCallStatusText('Bağlanıyor...'); setIsGroupCall(false); setIsCallModalOpen(true); setActiveCallId(call.id);
+      const answer = await connection.answer(call.offer);
+      const { error } = await client.from('calls').update({ status: 'connected', answer }).eq('id', call.id);
+      if (error) throw error;
+    } catch (error: any) {
+      stream?.getTracks().forEach(track => track.stop());
+      handleEndCall(); showToast('Arama kabul edilemedi: ' + error.message);
+    } finally { preparingCallRef.current = false; }
   };
 
   const handleRejectIncomingCall = async () => {
