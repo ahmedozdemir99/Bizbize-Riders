@@ -219,6 +219,10 @@ export default function App() {
       registerPresence(currentUser);
       syncGroupsFromServer();
       fetchOnlineRiders();
+
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
     }
 
     const interval = setInterval(() => {
@@ -390,6 +394,17 @@ export default function App() {
             if (c.callee_id === deviceId && c.status === 'ringing') {
               setPendingCall(c);
               if (soundEnabled) soundEffects.ringTone();
+              if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.ready.then((reg) => {
+                  reg.showNotification(`Gelen ${c.type === 'video' ? 'Görüntülü' : 'Sesli'} Arama`, {
+                    body: `${c.caller_name || 'Bir sürücü'} sizi arıyor...`,
+                    icon: '/logo.png',
+                    data: { url: window.location.href }
+                  } as any);
+                });
+              } else if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(`Gelen Arama: ${c.caller_name || 'Sürücü'}`, { body: 'Sizi arıyor...' });
+              }
             }
 
             // Caller receives answer or rejection
