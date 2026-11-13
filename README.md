@@ -23,6 +23,14 @@ Supabase bağlantısı giriş ekranındaki veritabanı ayarlarından düzenleneb
 Sunucu bağlantısı olmadan mesajlar yalnızca bu tarayıcıda saklanır.
 Cihazlar arası mesajlaşma ve aramalar Supabase kurulumu gerektirir.
 
+## Sürüş planları
+
+**Sürüş Planları** sekmesinde buluşma, varış, ara duraklar, saat ve yol notları
+kaydedilebilir. Her plan için hazırlık listesi, harita rotası ve takvim dosyası
+bulunur. **Sohbette hazırla** seçilen kortejde bir mesaj taslağı açar. Sürücü
+taslağı gözden geçirip gönderir. Planlar tarayıcıda saklanır ve cihaz yedeğine
+dâhil edilir. Cihazlar arası sohbet paylaşımı mevcut Supabase bağlantısını kullanır.
+
 ## Logo
 
 `public/logo.svg` giriş ekranı, üst çubuk ve tarayıcı sekmesinde kullanılır.

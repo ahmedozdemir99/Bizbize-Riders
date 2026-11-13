@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { MessageSquare, Route } from 'lucide-react';
+import { RidePlanner } from './components/RidePlanner';
+import { mergeRidePlans, readRidePlans, writeRidePlans, type RidePlan } from './services/ridePlans';
 import { 
   UserProfile, 
   CortegeGroup, 
@@ -80,6 +83,11 @@ export default function App() {
   const [activeChatName, setActiveChatName] = useState<string>('');
   const [activeChatAvatar, setActiveChatAvatar] = useState<string>('');
 
+  const [activeSection, setActiveSection] = useState<'chats' | 'rides'>('chats');
+  const [chatDraft, setChatDraft] = useState('');
+  const [ridePlans, setRidePlans] = useState<RidePlan[]>(() => {
+    try { return readRidePlans(); } catch { return []; }
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [deletedGroupIds, setDeletedGroupIds] = useState<Set<string>>(() => {
     try {
@@ -235,7 +243,7 @@ export default function App() {
   useEffect(() => {
     const client = getSupabaseClient();
     if (!client) {
-      setStatusText('Bağlantı ayarı gerekli');
+      setStatusText('Yerel mod');
       setIsOnlineOk(false);
       return;
     }
@@ -587,7 +595,7 @@ export default function App() {
     const name = currentUser;
     handleEndCall(); setIsAttachOpen(false); setPendingCall(null); setPendingGroupCall(null);
     activeChatRef.current = null;
-    localStorage.removeItem('rider_username'); setCurrentUser(''); setActiveChatId(null);
+    localStorage.removeItem('rider_username'); setCurrentUser(''); setActiveChatId(null); setActiveSection('chats'); setChatDraft('');
     const client = getSupabaseClient();
     if (client) {
       try { await client.from('profiles').upsert({ id: deviceId, name, online: false, updated_at: new Date().toISOString() }); }
@@ -595,7 +603,9 @@ export default function App() {
     }
   };
 
-  const handleOpenChat = (id: string, name: string, avatar: string) => {
+  const handleOpenChat = (id: string, name: string, avatar: string, draft = '') => {
+    setActiveSection('chats');
+    setChatDraft(draft);
     if (id.startsWith('dm_')) {
       const rider = allRiders.find((r) => 'dm_' + [deviceId, r.id].sort().join('_') === id);
       if (rider) {
@@ -1014,12 +1024,12 @@ export default function App() {
   // Backup Export
   const handleExportBackup = () => {
     const data = { app: 'BizBize Riders', version: 2, username: currentUser, deviceId,
-      customGroups: groups, dmContacts, messages: getAllLocalMessages(), exportDate: new Date().toISOString() };
+      customGroups: groups, dmContacts, messages: getAllLocalMessages(), ridePlans, exportDate: new Date().toISOString() };
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url;
     link.download = `BizBizeRiders_Yedek_${new Date().toISOString().slice(0, 10)}.json`;
     link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('Cihazdaki sohbetlerin yedeği indirildi.');
+    showToast('Cihaz yedeği indirildi.');
   };
 
   const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1029,6 +1039,8 @@ export default function App() {
     reader.onload = () => {
       try {
         const backup = parseBackup(String(reader.result));
+        const importedPlans = backup.ridePlans;
+        if (importedPlans && !saveRidePlans(current => mergeRidePlans(current, importedPlans))) return;
         const byGroup = new Map<string, Message[]>();
         for (const message of backup.messages) {
           const list = byGroup.get(message.group_id) || []; list.push(message); byGroup.set(message.group_id, list);
@@ -1040,7 +1052,7 @@ export default function App() {
         setIsBackupOpen(false);
         showToast([...byGroup.keys()].some(id => unpersistedChats.has(id))
           ? 'Yedek açıldı fakat cihaz hafızası dolu. Bazı mesajlar yalnızca bu oturumda tutuluyor.'
-          : 'Kortejler, rehber ve mesaj geçmişi geri yüklendi.');
+          : 'Cihaz yedeği geri yüklendi.');
       } catch (error: any) { showToast('Yedek yüklenemedi: ' + error.message); }
     };
     reader.onerror = () => showToast('Yedek dosyası okunamadı.');
@@ -1113,10 +1125,21 @@ export default function App() {
     registerPresence(currentUser);
   };
 
+  const saveRidePlans = (update: (current: RidePlan[]) => RidePlan[]) => {
+    try {
+      const next = update(readRidePlans());
+      writeRidePlans(next);
+      setRidePlans(next);
+      return true;
+    } catch {
+      showToast('Sürüş planları kaydedilemedi. Tarayıcı depolamasını kontrol edin.');
+      return false;
+    }
+  };
+
   return (
     <div className="app-shell w-full h-dvh flex items-center justify-center bg-black overflow-hidden font-sans select-none">
-      {/* Mobile Frame Container */}
-      <div className="w-full max-w-[480px] h-full flex flex-col bg-zinc-950 relative shadow-2xl border-x border-zinc-800">
+      <div className={`w-full h-full flex flex-col bg-zinc-950 relative shadow-2xl border-x border-zinc-800 ${currentUser ? 'max-w-4xl' : 'max-w-none'}`}>
         {!currentUser ? (
           <LoginScreen
             onLogin={handleLogin}
@@ -1138,7 +1161,28 @@ export default function App() {
               onOpenVoiceAssistant={() => setIsVoiceAssistantOpen(true)}
               onLogout={handleLogout}
             />
-            {!activeChatId ? (
+            {!activeChatId && (
+              <nav aria-label="Ana menü" className="flex shrink-0 gap-1 border-b border-zinc-800 bg-zinc-950 px-3 sm:px-5">
+                <button type="button" aria-current={activeSection === 'chats' ? 'page' : undefined} onClick={() => setActiveSection('chats')} className="rider-tab">
+                  <MessageSquare aria-hidden="true" className="size-4" /> Sohbetler
+                </button>
+                <button type="button" aria-current={activeSection === 'rides' ? 'page' : undefined} onClick={() => {
+                  try { setRidePlans(readRidePlans()); } catch { showToast('Sürüş planları okunamadı.'); }
+                  setActiveSection('rides');
+                }} className="rider-tab">
+                  <Route aria-hidden="true" className="size-4" /> Sürüş Planları
+                </button>
+              </nav>
+            )}
+            {!activeChatId && activeSection === 'rides' ? (
+              <RidePlanner
+                plans={ridePlans}
+                groups={groups}
+                onSave={plan => saveRidePlans(current => [...current.filter(existing => existing.id !== plan.id), plan])}
+                onDelete={id => saveRidePlans(current => current.filter(plan => plan.id !== id))}
+                onShare={(group, draft) => handleOpenChat(group.id, group.name, group.avatar || '🏍️', draft)}
+              />
+            ) : !activeChatId ? (
               <ChatList
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
@@ -1156,6 +1200,7 @@ export default function App() {
             ) : (
               <ChatRoom
                 key={activeChatId}
+                initialDraft={chatDraft}
                 onError={showToast}
                 chatName={activeChatName}
                 chatAvatar={activeChatAvatar}

@@ -24,6 +24,7 @@ import { LiveMap } from './LiveMap';
 import { SpeedometerWidget } from './SpeedometerWidget';
 
 interface ChatRoomProps {
+  initialDraft?: string;
   onError: (message: string) => void;
   chatName: string;
   chatAvatar: string;
@@ -50,6 +51,7 @@ interface ChatRoomProps {
 }
 
 export const ChatRoom: React.FC<ChatRoomProps> = ({
+  initialDraft = '',
   onError,
   chatName,
   chatAvatar,
@@ -68,7 +70,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   onOpenRoadAlert,
   onDeleteMessage,
 }) => {
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(initialDraft);
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -330,12 +332,19 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
                   </div>
                 </div>
               ) : (
-                /* Regular Text Message */
-                m.type === 'text' && (
-                  <p className="text-[14.5px] font-medium leading-relaxed whitespace-pre-wrap break-words">
-                    {m.text || ''}
-                  </p>
-                )
+                m.type === 'text' && (() => {
+                  const text = m.text || '';
+                  const lines = text.split('\n');
+                  const route = lines.at(-1);
+                  const isRidePlan = text.startsWith('🏍️ Sürüş planı · ') &&
+                    route?.startsWith('https://www.google.com/maps/dir/?api=1&');
+                  return (
+                    <div className="text-[14.5px] font-medium leading-relaxed">
+                      <p className="whitespace-pre-wrap break-words">{isRidePlan ? lines.slice(0, -1).join('\n') : text}</p>
+                      {isRidePlan && <a href={route} target="_blank" rel="noreferrer" className="mt-2 inline-block underline">Rotayı aç</a>}
+                    </div>
+                  );
+                })()
               )}
 
               {/* Live Location Message with Real Google Maps */}
