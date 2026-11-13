@@ -9,7 +9,7 @@ Aşağıdaki kurulum yapılmadan telefonda “etkin” abonelik gösterilmez.
 
 AI Studio'dan uygulamayı HTTPS ile yayımlayın. Önizleme/sohbet paylaşım ekranını veya
 iframe içindeki önizlemeyi kullanmayın. İki telefonda aynı kalıcı uygulama adresini açın.
-Bu adresin origin'ini not edin: örneğin `https://uygulama.example.com` (sonunda `/` yok).
+Bu adresin origin'ini not edin: örneğin `https://uygulama.example.com` (sonunda `/` yok). Sites üzerinden yayın yapıyorsanız, Sites'ın verdiği HTTPS adresini kullanın.
 
 ## 2. Bildirim anahtarları
 
@@ -24,6 +24,10 @@ Bu komut **gizli** `.env.push.local` dosyasını oluşturur; var olan anahtarlar
 Dosyada `APP_ORIGIN` değerini yayımlanmış origin, `VAPID_SUBJECT` değerini
 `mailto:email-adresiniz` yapın. Anahtarları veya bu dosyayı sohbete/GitHub'a göndermeyin.
 VAPID anahtarlarını değiştirmek tüm telefonlarda yeniden abonelik gerektirir.
+Var olan yayını koruyarak ikinci bir yayın adresi eklemek için güncel Push fonksiyonu
+`APP_ORIGIN` içinde virgülle ayrılmış tam origin değerlerini kabul eder. Mevcut VAPID
+anahtarlarını, worker sırrını ve Vault ayarlarını aynı bırakın. Örnek:
+`https://eski.example.com,https://yeni.example.com`.
 
 ## 3. Supabase kurulumu
 
@@ -89,8 +93,9 @@ bağlantı hatalarında cron tekrar dener. Gönderenin tarayıcısının açık 
   aramayı yeniden çaldıramaz. Bitmiş/kaçırılmış arama bildirimi aynı etiketle sessizce
   güncellenir; görünmez push kullanılıp iOS'un kullanıcıya görünür bildirim kuralı ihlal edilmez.
 - Bildirime dokunmak ilgili kabul/katıl ekranını açar; mikrofonu kendiliğinden açmaz.
-- Tarayıcı aboneliği yenilenirse uygulama açıkken yenileme uyarısı gösterilir;
-  Bildirim Ayarları'ndan tekrar açın. Site verisi silinmesi veya izin kaldırılması
+- Tarayıcı yeni bir abonelik uç noktası sağlarsa uygulama tekrar görünür olduğunda
+  veya internete bağlandığında sunucudaki kaydı günceller. Tarayıcıda geçerli abonelik
+  kalmadıysa Bildirim Ayarları'ndan tekrar açın. Site verisi silinmesi veya izin kaldırılması
   sonrasında otomatik teslimat varsayılmaz.
 
 ## Sınırlar
