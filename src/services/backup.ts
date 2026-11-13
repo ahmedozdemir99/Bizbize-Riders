@@ -1,9 +1,11 @@
+import { parseRidePlans, type RidePlan } from './ridePlans';
 import type { CortegeGroup, DirectContact, Message } from '../types';
 
 export function parseBackup(raw: string): {
   customGroups: Record<string, { info: CortegeGroup }>;
   dmContacts: Record<string, DirectContact>;
   messages: Message[];
+  ridePlans?: RidePlan[];
 } {
   const value = JSON.parse(raw);
   const record = (item: unknown) => !!item && typeof item === 'object' && !Array.isArray(item);
@@ -23,5 +25,6 @@ export function parseBackup(raw: string): {
       typeof message.sender_id !== 'string' || typeof message.sender_name !== 'string' ||
       !Number.isFinite(message.time) || !types.has(message.type)) throw new Error('Yedekteki mesaj bilgileri geçersiz.');
   }
+  if (value.ridePlans !== undefined) parseRidePlans(value.ridePlans);
   return value;
 }

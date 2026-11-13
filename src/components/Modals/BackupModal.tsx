@@ -30,7 +30,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
               <h3 className="font-display font-bold text-xl text-white uppercase tracking-wide">
                 YEDEKLEME & GERİ YÜKLE
               </h3>
-              <p className="text-xs text-zinc-400">Kortejler ve mesaj ayarlarını yedekleyin</p>
+              <p className="text-xs text-zinc-400">Sohbetleri ve sürüş planlarını yedekleyin</p>
             </div>
           </div>
           <button
@@ -42,7 +42,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({
         </div>
 
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Cihazda saklanan kortejleri, rehberinizi ve sohbet geçmişinizi JSON olarak yedekleyebilirsiniz. Geri yükleme mevcut mesajlarla birleştirir; sunucuya mesaj göndermez.
+          Cihazda saklanan kortejleri, rehberinizi, sohbet geçmişinizi ve sürüş planlarınızı JSON olarak yedekleyebilirsiniz. Geri yükleme mevcut kayıtlarla birleştirir; sunucuya mesaj göndermez.
         </p>
 
         <div className="space-y-3 pt-2">

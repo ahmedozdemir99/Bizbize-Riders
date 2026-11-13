@@ -98,3 +98,52 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
+
+.rider-tab {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  gap: .5rem;
+  padding-inline: .85rem;
+  border-bottom: 2px solid transparent;
+  color: #a1a1aa;
+  font-size: .875rem;
+  font-weight: 700;
+}
+.rider-tab:hover, .rider-tab[aria-current] { color: #fff; }
+.rider-tab[aria-current] { border-color: #fb923c; }
+.ride-banner { background: radial-gradient(ellipse at top right, #432313, transparent 70%), #191719; }
+
+.riders-welcome {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(22rem, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #121215;
+}
+.riders-cover {
+  display: flex;
+  min-width: 0;
+  min-height: 34rem;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: clamp(1.5rem, 4vw, 4rem);
+  background-color: #252322;
+  background-image: linear-gradient(0deg, #08090bf5 0%, #08090b65 48%, #08090b36 82%, #08090b99 100%), url('/ride-cover.webp');
+  background-size: cover;
+  background-position: center;
+}
+.riders-brand { display: flex; align-items: center; gap: .8rem; font-size: 1.2rem; font-weight: 800; }
+.riders-intro h1 { font-size: clamp(3.7rem, 9vw, 8.5rem); font-weight: 700; line-height: .95; }
+.riders-intro p { margin-top: 1.25rem; max-width: 24rem; color: #e4e4e7; font-size: 1rem; line-height: 1.6; }
+.riders-intro ul { display: flex; flex-wrap: wrap; gap: .6rem 1.15rem; margin-top: 1.5rem; color: #e4e4e7; font-size: .8rem; }
+.riders-intro li { display: flex; align-items: center; gap: .4rem; }
+.riders-intro li svg { width: 1rem; height: 1rem; color: #fb923c; }
+.riders-entry { display: grid; place-items: center; padding: clamp(1.5rem, 4vw, 4rem); }
+@media (max-width: 767px) {
+  .riders-welcome { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .riders-cover { min-height: clamp(18rem, 48svh, 26rem); gap: 2.5rem; }
+  .riders-intro h1 { font-size: clamp(3.4rem, 12vw, 5rem); }
+  .riders-entry { place-items: start center; }
+}

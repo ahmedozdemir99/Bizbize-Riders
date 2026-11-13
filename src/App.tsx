@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { MessageSquare, Route } from 'lucide-react';
+import { RidePlanner } from './components/RidePlanner';
+import { mergeRidePlans, readRidePlans, writeRidePlans, type RidePlan } from './services/ridePlans';
 import { 
   UserProfile, 
   CortegeGroup, 
@@ -16,8 +19,8 @@ import {
   initSupabase 
 } from './services/supabase';
 import { isMessageForRider } from './services/messageAccess';
-import { notifyIncomingCall, dismissCallNotification, enableNotifications, type NotificationIntent } from './services/notifications';
-import {getOwnRiderIds,syncPushPreferences} from './services/webPush';
+import { notifyIncomingCall, dismissCallNotification, type NotificationIntent } from './services/notifications';
+import {getOwnRiderIds,syncPushPreferences,wantsGroupPush} from './services/webPush';
 import {NotificationSettingsModal} from './components/Modals/NotificationSettingsModal';
 import { parseBackup } from './services/backup';
 import { GroupCall } from './services/groupCall';
@@ -80,6 +83,11 @@ export default function App() {
   const [activeChatName, setActiveChatName] = useState<string>('');
   const [activeChatAvatar, setActiveChatAvatar] = useState<string>('');
 
+  const [activeSection, setActiveSection] = useState<'chats' | 'rides'>('chats');
+  const [chatDraft, setChatDraft] = useState('');
+  const [ridePlans, setRidePlans] = useState<RidePlan[]>(() => {
+    try { return readRidePlans(); } catch { return []; }
+  });
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [deletedGroupIds, setDeletedGroupIds] = useState<Set<string>>(() => {
     try {
@@ -235,7 +243,7 @@ export default function App() {
   useEffect(() => {
     const client = getSupabaseClient();
     if (!client) {
-      setStatusText('Bağlantı ayarı gerekli');
+      setStatusText('Yerel mod');
       setIsOnlineOk(false);
       return;
     }
@@ -261,6 +269,7 @@ export default function App() {
       if (data.type === 'NEW_LOCAL_MESSAGE' && data.payload) {
         const m: Message = data.payload;
         if (!isMessageForRider(m, deviceId)) return;
+        if (m.group_id.startsWith('dm_') && hiddenRidersRef.current.has(m.sender_id)) return;
         if (activeChatId && m.group_id === activeChatId) {
           loadMessages(activeChatId);
         } else if (m.sender_id !== deviceId) {
@@ -365,15 +374,9 @@ export default function App() {
         .order('name');
 
       if (!error && data) {
-        const filtered = data.filter(
-          (u) =>
-            !hiddenRidersRef.current.has(String(u.id)) &&
-            u.online &&
-            u.updated_at &&
-            Date.now() - new Date(u.updated_at).getTime() < 70000
-        );
-        setOnlineRiders(filtered);
-        setAllRiders(data.filter((u) => !hiddenRidersRef.current.has(String(u.id))));
+        const visible = data.filter(u => !hiddenRidersRef.current.has(u.id) && !ownRiderIds.includes(u.id));
+        setAllRiders(visible);
+        setOnlineRiders(visible.filter(u => u.online && u.updated_at && Date.now() - Date.parse(u.updated_at) < 70000));
       }
     } catch (e) {
       console.warn('Fetch online riders offline fallback');
@@ -395,6 +398,7 @@ export default function App() {
           (payload: any) => {
             const m: Message = payload.new;
             if (!isMessageForRider(m, deviceId)) return;
+            if (m.group_id.startsWith('dm_') && hiddenRidersRef.current.has(m.sender_id)) return;
             if (activeChatId && m.group_id === activeChatId) {
               loadMessages(activeChatId);
             } else if (m.sender_id !== deviceId) {
@@ -587,7 +591,7 @@ export default function App() {
     const name = currentUser;
     handleEndCall(); setIsAttachOpen(false); setPendingCall(null); setPendingGroupCall(null);
     activeChatRef.current = null;
-    localStorage.removeItem('rider_username'); setCurrentUser(''); setActiveChatId(null);
+    localStorage.removeItem('rider_username'); setCurrentUser(''); setActiveChatId(null); setActiveSection('chats'); setChatDraft('');
     const client = getSupabaseClient();
     if (client) {
       try { await client.from('profiles').upsert({ id: deviceId, name, online: false, updated_at: new Date().toISOString() }); }
@@ -595,7 +599,9 @@ export default function App() {
     }
   };
 
-  const handleOpenChat = (id: string, name: string, avatar: string) => {
+  const handleOpenChat = (id: string, name: string, avatar: string, draft = '') => {
+    setActiveSection('chats');
+    setChatDraft(draft);
     if (id.startsWith('dm_')) {
       const rider = allRiders.find((r) => 'dm_' + [deviceId, r.id].sort().join('_') === id);
       if (rider) {
@@ -724,39 +730,61 @@ export default function App() {
     showToast(owner ? 'Kortej silindi.' : 'Kortej listenizden kaldırıldı.');
   };
 
-  const removeRider = (id: string) => {
-    const hidden = new Set(hiddenRidersRef.current); hidden.add(id); hiddenRidersRef.current = hidden;
-    localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden])); setHiddenRiderIds(hidden);
-    setAllRiders(prev => prev.filter(rider => rider.id !== id)); setOnlineRiders(prev => prev.filter(rider => rider.id !== id));
-    const chatId = 'dm_' + [deviceId, id].sort().join('_');
-    setDmContacts(prev => { const next = { ...prev }; delete next[chatId]; localStorage.setItem('rider_dm_contacts', JSON.stringify(next)); return next; });
-    if (activeChatRef.current === chatId) { activeChatRef.current = null; setActiveChatId(null); }
+  const removeRiders = (ids: string[]) => {
+    const removed = new Set(ids);
+    const hidden = new Set([...hiddenRidersRef.current, ...removed]);
+    try {
+      localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden]));
+    } catch {
+      showToast('Sürücü listesi kaydedilemedi. Cihaz depolamasını kontrol edin.');
+      return false;
+    }
+    hiddenRidersRef.current = hidden;
+    setHiddenRiderIds(hidden);
+    setAllRiders(previous => previous.filter(rider => !removed.has(rider.id)));
+    setOnlineRiders(previous => previous.filter(rider => !removed.has(rider.id)));
+    setDmContacts(previous => Object.fromEntries(
+      Object.entries(previous).filter(([, contact]) => !removed.has(contact.id))
+    ));
+    const chatId = activeChatRef.current;
+    if (chatId?.startsWith('dm_') && removed.has(resolveRiderId(chatId, deviceId, dmContacts[chatId]?.id) ?? '')) {
+      activeChatRef.current = null;
+      setActiveChatId(null);
+    }
+    return true;
+  };
+
+  const handleHideRider = (id: string, name: string) => {
+    if (window.confirm(`“${name}” rehberinizden silinsin mi? Tekrar eklemek için sürücü ID’si gerekir. Mesaj geçmişi cihazda kalır.`) && removeRiders([id])) {
+      showToast('Sürücü rehberinizden silindi.');
+    }
   };
 
   const handleDeleteDm = (chatId: string, name: string) => {
     const id = resolveRiderId(chatId, deviceId, dmContacts[chatId]?.id);
-    if (id && window.confirm(`"${name}" sürücüsü rehberinizden kaldırılsın mı? Mesaj geçmişi korunur.`)) { removeRider(id); showToast('Sürücü rehberinizden kaldırıldı.'); }
+    if (id) handleHideRider(id, name);
   };
-  const handleHideRider = (id: string, name: string) => {
-    if (window.confirm(`"${name}" sürücüsü rehberinizden kaldırılsın mı?`)) { removeRider(id); showToast('Sürücü rehberinizden kaldırıldı.'); }
-  };
+
   const handleAddRider = (inputName: string, inputId: string): boolean => {
     const name = inputName.trim(), id = inputId.trim();
     if (name.length < 2 || name.length > 40 || !id || id.length > 200 || id.startsWith('dm_') || /\s/.test(id)) {
       showToast('Geçerli bir sürücü adı ve profil ID’si girin.'); return false;
     }
-    if (id === deviceId) { showToast('Kendinizi rehbere ekleyemezsiniz.'); return false; }
+    if (ownRiderIds.includes(id)) { showToast('Kendinizi rehbere ekleyemezsiniz.'); return false; }
     const dmId = 'dm_' + [deviceId, id].sort().join('_');
-    const hidden = new Set(hiddenRidersRef.current); hidden.delete(id); hiddenRidersRef.current = hidden;
-    localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden])); setHiddenRiderIds(hidden);
+    const hidden = new Set(hiddenRidersRef.current);
+    hidden.delete(id);
+    try {
+      localStorage.setItem('rider_hidden_ids', JSON.stringify([...hidden]));
+    } catch {
+      showToast('Sürücü listesi kaydedilemedi. Cihaz depolamasını kontrol edin.');
+      return false;
+    }
+    hiddenRidersRef.current = hidden;
+    setHiddenRiderIds(hidden);
     setDmContacts(prev => ({ ...prev, [dmId]: { id, name } }));
     showToast(dmContacts[dmId] ? 'Sürücü bilgisi güncellendi.' : `${name} rehbere eklendi.`); void fetchOnlineRiders(); return true;
   };
-  const handleRestoreHidden = () => {
-    hiddenRidersRef.current = new Set(); setHiddenRiderIds(new Set());
-    localStorage.setItem('rider_hidden_ids', '[]'); void fetchOnlineRiders(); showToast('Gizlenen sürücüler geri getirildi.');
-  };
-
   useEffect(() => () => {
     callGenerationRef.current++; preparingCallRef.current = false;
     const session = callSessionRef.current;
@@ -1014,12 +1042,12 @@ export default function App() {
   // Backup Export
   const handleExportBackup = () => {
     const data = { app: 'BizBize Riders', version: 2, username: currentUser, deviceId,
-      customGroups: groups, dmContacts, messages: getAllLocalMessages(), exportDate: new Date().toISOString() };
+      customGroups: groups, dmContacts, messages: getAllLocalMessages(), ridePlans, exportDate: new Date().toISOString() };
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url;
     link.download = `BizBizeRiders_Yedek_${new Date().toISOString().slice(0, 10)}.json`;
     link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast('Cihazdaki sohbetlerin yedeği indirildi.');
+    showToast('Cihaz yedeği indirildi.');
   };
 
   const handleImportBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1029,18 +1057,24 @@ export default function App() {
     reader.onload = () => {
       try {
         const backup = parseBackup(String(reader.result));
+        const importedPlans = backup.ridePlans;
+        if (importedPlans && !saveRidePlans(current => mergeRidePlans(current, importedPlans))) return;
         const byGroup = new Map<string, Message[]>();
         for (const message of backup.messages) {
           const list = byGroup.get(message.group_id) || []; list.push(message); byGroup.set(message.group_id, list);
         }
         for (const [id, history] of byGroup) updateLocalMessages(id, mergeMessages(getLocalMessages(id), history));
         setGroups(prev => ({ ...prev, ...backup.customGroups }));
-        setDmContacts(prev => ({ ...prev, ...backup.dmContacts }));
+        setDmContacts(prev => ({
+          ...prev,
+          ...Object.fromEntries(Object.entries(backup.dmContacts)
+            .filter(([, contact]) => !hiddenRidersRef.current.has(contact.id))),
+        }));
         if (activeChatRef.current) void loadMessages(activeChatRef.current);
         setIsBackupOpen(false);
         showToast([...byGroup.keys()].some(id => unpersistedChats.has(id))
           ? 'Yedek açıldı fakat cihaz hafızası dolu. Bazı mesajlar yalnızca bu oturumda tutuluyor.'
-          : 'Kortejler, rehber ve mesaj geçmişi geri yüklendi.');
+          : 'Cihaz yedeği geri yüklendi.');
       } catch (error: any) { showToast('Yedek yüklenemedi: ' + error.message); }
     };
     reader.onerror = () => showToast('Yedek dosyası okunamadı.');
@@ -1056,8 +1090,15 @@ export default function App() {
         const {data,error} = await client.from('calls').select('*').eq('id',intent.callId).eq('callee_id',deviceId).limit(1);
         if (disposed) return;
         const call = data?.[0] as CallRecord | undefined;
-        if (error || !call || call.status !== 'ringing' || Date.now() - new Date(call.created_at).getTime() > 45000) {
-          showToast('Bu arama sonlanmış veya süresi dolmuş.'); void dismissCallNotification(intent.callId); return;
+        if (error || !call) {
+          showToast('Arama bilgisi alınamadı.'); return;
+        }
+        if (call.status !== 'ringing' || Date.now() - Date.parse(call.created_at) >= 45000) {
+          const entry: CallRecord = call.status === 'ringing' ? {...call, status:'missed'} : call;
+          setCallHistory(previous => [entry, ...previous.filter(item => item.id !== entry.id)]);
+          setIsCallHistoryOpen(true);
+          void dismissCallNotification(intent.callId);
+          return;
         }
         if (intent.action === 'reject') {
           const {error} = await client.from('calls').update({status:'rejected'}).eq('id',call.id).eq('callee_id',deviceId).eq('status','ringing');
@@ -1070,11 +1111,32 @@ export default function App() {
         if(error||!call||call.status!=='active'||Date.now()-Date.parse(call.created_at)>45000){showToast('Kortej araması sonlanmış veya davetin süresi dolmuş.');return;}
         if(!callSessionRef.current&&!groupCallRef.current&&!preparingCallRef.current)setPendingGroupCall(call);
       } else if (intent.chatId) {
-        const contact = dmContacts[intent.chatId]; const group = groupsRef.current[intent.chatId]?.info;
-        if (contact || group) handleOpenChat(intent.chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
+        const chatId = intent.chatId;
+        const contact = dmContacts[chatId];
+        const group = groupsRef.current[chatId]?.info;
+        if (contact || group) {
+          handleOpenChat(chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
+        } else if (chatId.startsWith('dm_')) {
+          const peerId = resolveRiderId(chatId, deviceId);
+          if (!peerId || hiddenRidersRef.current.has(peerId)) return;
+          const {data, error} = await client.from('messages').select('sender_name')
+            .eq('group_id', chatId).eq('recipient_id', deviceId).eq('sender_id', peerId)
+            .order('time', {ascending:false}).limit(1);
+          if (disposed || hiddenRidersRef.current.has(peerId)) return;
+          if (error || !data?.length) {
+            showToast('Bildirimdeki sohbet bulunamadı.'); return;
+          }
+          const name = data[0].sender_name || 'Sürücü';
+          setDmContacts(previous => ({...previous, [chatId]:{id:peerId, name}}));
+          handleOpenChat(chatId, name, '👤');
+        }
       }
     };
-    const message = (event: MessageEvent) => { if (event.data?.type === 'NOTIFICATION_INTENT') void openIntent(event.data); };
+    const message = (event: MessageEvent) => {
+      if (event.data?.type !== 'NOTIFICATION_INTENT') return;
+      event.ports[0]?.postMessage(true);
+      void openIntent(event.data);
+    };
     const native = (event: Event) => void openIntent((event as CustomEvent<NotificationIntent>).detail || {});
     navigator.serviceWorker?.addEventListener('message',message);
     window.addEventListener('bizbize:notification',native);
@@ -1089,8 +1151,20 @@ export default function App() {
 
   useEffect(()=>{
     if(!currentUser)return;
-    const ids: string[]=JSON.parse(localStorage.getItem('rider_push_groups')||'[]');
-    void syncPushPreferences(ids.length?Object.keys(groups):[],[...hiddenRiderIds]).catch(()=>{});
+    const sync = () => {
+      void syncPushPreferences(wantsGroupPush() ? Object.keys(groups) : [], [...hiddenRiderIds]).catch(()=>{});
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') sync(); };
+    const onRenewed = (event: MessageEvent) => { if (event.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') sync(); };
+    sync();
+    window.addEventListener('online', sync);
+    document.addEventListener('visibilitychange', onVisible);
+    navigator.serviceWorker?.addEventListener('message', onRenewed);
+    return () => {
+      window.removeEventListener('online', sync);
+      document.removeEventListener('visibilitychange', onVisible);
+      navigator.serviceWorker?.removeEventListener('message', onRenewed);
+    };
   },[groups,hiddenRiderIds,currentUser]);
 
   useEffect(()=>{
@@ -1098,9 +1172,6 @@ export default function App() {
       localStorage.removeItem('rider_push_identity_notice');
       showToast('Bildirimler açıldı. İki telefonda da profilinizdeki yeni sürücü ID’leriyle birbirinizi ekleyin.',10000);
     }
-    const changed=(event:MessageEvent)=>{if(event.data?.type==='PUSH_SUBSCRIPTION_CHANGED')showToast('Bildirim aboneliği yenilenmeli. Bildirim Ayarları’ndan tekrar açın.',7000);};
-    navigator.serviceWorker?.addEventListener('message',changed);
-    return()=>navigator.serviceWorker?.removeEventListener('message',changed);
   },[]);
 
   // Save custom Supabase configuration
@@ -1113,10 +1184,28 @@ export default function App() {
     registerPresence(currentUser);
   };
 
+  const saveRidePlans = (update: (current: RidePlan[]) => RidePlan[]) => {
+    try {
+      const next = update(readRidePlans());
+      writeRidePlans(next);
+      setRidePlans(next);
+      return true;
+    } catch {
+      showToast('Sürüş planları kaydedilemedi. Tarayıcı depolamasını kontrol edin.');
+      return false;
+    }
+  };
+
+  const savedContacts = Object.fromEntries(Object.entries(dmContacts)
+    .filter(([, contact]) => !hiddenRiderIds.has(contact.id) && !ownRiderIds.includes(contact.id)));
+  const directoryRiders = new Map(allRiders.map(rider => [rider.id, rider]));
+  for (const contact of Object.values(savedContacts)) {
+    if (!directoryRiders.has(contact.id)) directoryRiders.set(contact.id, { ...contact, online: false });
+  }
+
   return (
     <div className="app-shell w-full h-dvh flex items-center justify-center bg-black overflow-hidden font-sans select-none">
-      {/* Mobile Frame Container */}
-      <div className="w-full max-w-[480px] h-full flex flex-col bg-zinc-950 relative shadow-2xl border-x border-zinc-800">
+      <div className={`w-full h-full flex flex-col bg-zinc-950 relative shadow-2xl border-x border-zinc-800 ${currentUser ? 'max-w-4xl' : 'max-w-none'}`}>
         {!currentUser ? (
           <LoginScreen
             onLogin={handleLogin}
@@ -1138,12 +1227,33 @@ export default function App() {
               onOpenVoiceAssistant={() => setIsVoiceAssistantOpen(true)}
               onLogout={handleLogout}
             />
-            {!activeChatId ? (
+            {!activeChatId && (
+              <nav aria-label="Ana menü" className="flex shrink-0 gap-1 border-b border-zinc-800 bg-zinc-950 px-3 sm:px-5">
+                <button type="button" aria-current={activeSection === 'chats' ? 'page' : undefined} onClick={() => setActiveSection('chats')} className="rider-tab">
+                  <MessageSquare aria-hidden="true" className="size-4" /> Sohbetler
+                </button>
+                <button type="button" aria-current={activeSection === 'rides' ? 'page' : undefined} onClick={() => {
+                  try { setRidePlans(readRidePlans()); } catch { showToast('Sürüş planları okunamadı.'); }
+                  setActiveSection('rides');
+                }} className="rider-tab">
+                  <Route aria-hidden="true" className="size-4" /> Sürüş Planları
+                </button>
+              </nav>
+            )}
+            {!activeChatId && activeSection === 'rides' ? (
+              <RidePlanner
+                plans={ridePlans}
+                groups={groups}
+                onSave={plan => saveRidePlans(current => [...current.filter(existing => existing.id !== plan.id), plan])}
+                onDelete={id => saveRidePlans(current => current.filter(plan => plan.id !== id))}
+                onShare={(group, draft) => handleOpenChat(group.id, group.name, group.avatar || '🏍️', draft)}
+              />
+            ) : !activeChatId ? (
               <ChatList
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
                 groups={groups}
-                dmContacts={dmContacts}
+                dmContacts={savedContacts}
                 onlineRiders={onlineRiders}
                 onOpenChat={handleOpenChat}
                 onDeleteGroup={handleDeleteGroup}
@@ -1156,6 +1266,7 @@ export default function App() {
             ) : (
               <ChatRoom
                 key={activeChatId}
+                initialDraft={chatDraft}
                 onError={showToast}
                 chatName={activeChatName}
                 chatAvatar={activeChatAvatar}
@@ -1326,7 +1437,7 @@ export default function App() {
       <RidersDirectoryModal
         isOpen={isRidersOpen}
         onClose={() => setIsRidersOpen(false)}
-        riders={allRiders}
+        riders={[...directoryRiders.values()]}
         activeChatId={activeChatId}
         onOpenDmChat={(id, name) => {
           const dmId = 'dm_' + [deviceId, id].sort().join('_');
@@ -1338,7 +1449,10 @@ export default function App() {
         }}
         onStartCall={handleStartCall}
         onHideRider={handleHideRider}
-        onRestoreHidden={handleRestoreHidden}
+        onDeleteAll={() => {
+          if (!window.confirm(`Rehberinizdeki ${directoryRiders.size} sürücü silinsin mi? Tekrar eklemek için sürücü ID’si gerekir. Mesaj geçmişi cihazda kalır.`)) return;
+          if (removeRiders([...directoryRiders.keys()])) showToast('Sürücü rehberi temizlendi.');
+        }}
       />
 
       <CallHistoryModal

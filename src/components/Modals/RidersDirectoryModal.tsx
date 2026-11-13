@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, MessageSquare, Phone, Video, UserPlus, RefreshCw, Users, Trash2 } from 'lucide-react';
+import { X, MessageSquare, Phone, Video, UserPlus, Users, Trash2 } from 'lucide-react';
 import { UserProfile } from '../../types';
 
 interface RidersDirectoryModalProps {
@@ -10,7 +10,7 @@ interface RidersDirectoryModalProps {
   onOpenDmChat: (id: string, name: string) => void;
   onStartCall: (target: { id: string; name: string }, type: 'audio' | 'video') => void;
   onHideRider: (id: string, name: string) => void;
-  onRestoreHidden: () => void;
+  onDeleteAll: () => void;
   onAddRiderToGroup?: (userId: string, userName: string) => void;
 }
 
@@ -22,7 +22,7 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
   onOpenDmChat,
   onStartCall,
   onHideRider,
-  onRestoreHidden,
+  onDeleteAll,
   onAddRiderToGroup,
 }) => {
   if (!isOpen) return null;
@@ -40,7 +40,7 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
               <h3 className="font-display font-bold text-xl text-white uppercase tracking-wide">
                 RIDERS DİZİNİ
               </h3>
-              <p className="text-xs text-zinc-400">Tüm aktif ve kayıtlı sürücüler</p>
+              <p className="text-xs text-zinc-400">Sürücü rehberin</p>
             </div>
           </div>
           <button
@@ -51,14 +51,15 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
           </button>
         </div>
 
-        {/* Restore Hidden Riders Button */}
-        <button
-          onClick={onRestoreHidden}
-          className="w-full py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold border border-zinc-700 flex items-center justify-center gap-2 biker-btn transition"
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-orange-400" />
-          <span>Gizlenen Rider Kayıtlarını Geri Getir</span>
-        </button>
+        {riders.length > 0 && (
+          <button
+            onClick={onDeleteAll}
+            className="w-full py-2.5 rounded-xl bg-red-950/50 hover:bg-red-950 text-red-300 text-xs font-bold border border-red-900/60 flex items-center justify-center gap-2 biker-btn transition"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Tüm sürücüleri rehberden sil
+          </button>
+        )}
 
         {/* Riders List */}
         <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 min-h-[200px]">
@@ -76,9 +77,9 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
                     {u.avatar || '🏍️'}
                   </div>
                   <div className="min-w-0">
-                    <div className="font-bold text-white truncate text-sm">{u.name || 'Sürücü'}</div>
+                    <div className="font-bold text-white truncate text-sm" title={u.id}>{u.name || 'Sürücü'}</div>
                     <div className={`text-[10px] font-semibold ${isOnline ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                      {isOnline ? '● Çevrimiçi' : '○ Çevrimdışı'}
+                      {isOnline ? '● Çevrimiçi' : '○ Çevrimdışı'} · {u.id.slice(-6)}
                     </div>
                   </div>
                 </div>
@@ -124,7 +125,8 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
                   <button
                     onClick={() => onHideRider(u.id, u.name || 'Rider')}
                     className="p-2 bg-red-950 hover:bg-red-900 text-red-400 border border-red-900/40 rounded-xl text-xs biker-btn"
-                    title="Sürücüyü Sil / Kaldır"
+                    aria-label={`${u.name || 'Sürücü'} rehberden sil`}
+                    title="Sürücüyü rehberden sil"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -135,7 +137,7 @@ export const RidersDirectoryModal: React.FC<RidersDirectoryModalProps> = ({
 
           {riders.length === 0 && (
             <div className="text-center text-zinc-500 text-xs py-10">
-              Şu anda başka kayıtlı Rider bulunamadı.
+              Rehberiniz boş. Sürücü Ekle ile bir sürücüyü ID’sinden ekleyebilirsiniz.
             </div>
           )}
         </div>
