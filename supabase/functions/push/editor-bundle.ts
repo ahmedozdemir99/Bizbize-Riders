@@ -106,16 +106,18 @@ async function sameSecret(a, b) {
   return difference === 0;
 }
 function createHandler(gateway) {
+  const allowedOrigins = new Set(gateway.origin.split(",").map((origin2) => origin2.trim()).filter(Boolean));
   return async (request) => {
     const origin2 = request.headers.get("origin");
+    const allowed = origin2 !== null && allowedOrigins.has(origin2);
     const headers = {
       "content-type": "application/json",
       "cache-control": "no-store",
       vary: "Origin",
-      ...origin2 === gateway.origin ? { "access-control-allow-origin": gateway.origin, "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "authorization, apikey, content-type" } : {}
+      ...allowed ? { "access-control-allow-origin": origin2, "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "authorization, apikey, content-type" } : {}
     };
     const reply = (status, body) => new Response(JSON.stringify(body), { status, headers });
-    if (origin2 && origin2 !== gateway.origin) return reply(403, { error: "origin_not_allowed" });
+    if (origin2 && !allowed) return reply(403, { error: "origin_not_allowed" });
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
     if (request.method === "GET") return reply(200, { publicKey: gateway.publicKey });
     if (request.method !== "POST") return reply(405, { error: "method_not_allowed" });
@@ -153,6 +155,10 @@ function createHandler(gateway) {
         const subscription = await gateway.own(userId, body.endpoint);
         if (!subscription) return reply(404, { error: "subscription_not_found" });
         const status = await gateway.send(subscription, { type: "message", eventId: crypto.randomUUID(), eventAt: Date.now(), title: "Bildirim denemesi", body: "Web Push g\xF6nderimi \xE7al\u0131\u015F\u0131yor.", chatId: "global", expiresAt: Date.now() + 6e4 }, 60);
+        if (status === 404 || status === 410) {
+          await gateway.remove(userId, subscription.endpoint);
+          return reply(410, { error: "subscription_expired" });
+        }
         return reply(status >= 200 && status < 300 ? 200 : 502, { accepted: status >= 200 && status < 300 });
       }
       return reply(400, { error: "unknown_action" });

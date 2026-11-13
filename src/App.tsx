@@ -19,8 +19,8 @@ import {
   initSupabase 
 } from './services/supabase';
 import { isMessageForRider } from './services/messageAccess';
-import { notifyIncomingCall, dismissCallNotification, enableNotifications, type NotificationIntent } from './services/notifications';
-import {getOwnRiderIds,syncPushPreferences} from './services/webPush';
+import { notifyIncomingCall, dismissCallNotification, type NotificationIntent } from './services/notifications';
+import {getOwnRiderIds,syncPushPreferences,wantsGroupPush} from './services/webPush';
 import {NotificationSettingsModal} from './components/Modals/NotificationSettingsModal';
 import { parseBackup } from './services/backup';
 import { GroupCall } from './services/groupCall';
@@ -1068,8 +1068,15 @@ export default function App() {
         const {data,error} = await client.from('calls').select('*').eq('id',intent.callId).eq('callee_id',deviceId).limit(1);
         if (disposed) return;
         const call = data?.[0] as CallRecord | undefined;
-        if (error || !call || call.status !== 'ringing' || Date.now() - new Date(call.created_at).getTime() > 45000) {
-          showToast('Bu arama sonlanmış veya süresi dolmuş.'); void dismissCallNotification(intent.callId); return;
+        if (error || !call) {
+          showToast('Arama bilgisi alınamadı.'); return;
+        }
+        if (call.status !== 'ringing' || Date.now() - Date.parse(call.created_at) >= 45000) {
+          const entry: CallRecord = call.status === 'ringing' ? {...call, status:'missed'} : call;
+          setCallHistory(previous => [entry, ...previous.filter(item => item.id !== entry.id)]);
+          setIsCallHistoryOpen(true);
+          void dismissCallNotification(intent.callId);
+          return;
         }
         if (intent.action === 'reject') {
           const {error} = await client.from('calls').update({status:'rejected'}).eq('id',call.id).eq('callee_id',deviceId).eq('status','ringing');
@@ -1082,11 +1089,32 @@ export default function App() {
         if(error||!call||call.status!=='active'||Date.now()-Date.parse(call.created_at)>45000){showToast('Kortej araması sonlanmış veya davetin süresi dolmuş.');return;}
         if(!callSessionRef.current&&!groupCallRef.current&&!preparingCallRef.current)setPendingGroupCall(call);
       } else if (intent.chatId) {
-        const contact = dmContacts[intent.chatId]; const group = groupsRef.current[intent.chatId]?.info;
-        if (contact || group) handleOpenChat(intent.chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
+        const chatId = intent.chatId;
+        const contact = dmContacts[chatId];
+        const group = groupsRef.current[chatId]?.info;
+        if (contact || group) {
+          handleOpenChat(chatId, contact?.name || group.name, contact ? '👤' : group.avatar);
+        } else if (chatId.startsWith('dm_')) {
+          const peerId = resolveRiderId(chatId, deviceId);
+          if (!peerId || hiddenRidersRef.current.has(peerId)) return;
+          const {data, error} = await client.from('messages').select('sender_name')
+            .eq('group_id', chatId).eq('recipient_id', deviceId).eq('sender_id', peerId)
+            .order('time', {ascending:false}).limit(1);
+          if (disposed) return;
+          if (error || !data?.length) {
+            showToast('Bildirimdeki sohbet bulunamadı.'); return;
+          }
+          const name = data[0].sender_name || 'Sürücü';
+          setDmContacts(previous => ({...previous, [chatId]:{id:peerId, name}}));
+          handleOpenChat(chatId, name, '👤');
+        }
       }
     };
-    const message = (event: MessageEvent) => { if (event.data?.type === 'NOTIFICATION_INTENT') void openIntent(event.data); };
+    const message = (event: MessageEvent) => {
+      if (event.data?.type !== 'NOTIFICATION_INTENT') return;
+      event.ports[0]?.postMessage(true);
+      void openIntent(event.data);
+    };
     const native = (event: Event) => void openIntent((event as CustomEvent<NotificationIntent>).detail || {});
     navigator.serviceWorker?.addEventListener('message',message);
     window.addEventListener('bizbize:notification',native);
@@ -1101,8 +1129,20 @@ export default function App() {
 
   useEffect(()=>{
     if(!currentUser)return;
-    const ids: string[]=JSON.parse(localStorage.getItem('rider_push_groups')||'[]');
-    void syncPushPreferences(ids.length?Object.keys(groups):[],[...hiddenRiderIds]).catch(()=>{});
+    const sync = () => {
+      void syncPushPreferences(wantsGroupPush() ? Object.keys(groups) : [], [...hiddenRiderIds]).catch(()=>{});
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') sync(); };
+    const onRenewed = (event: MessageEvent) => { if (event.data?.type === 'PUSH_SUBSCRIPTION_CHANGED') sync(); };
+    sync();
+    window.addEventListener('online', sync);
+    document.addEventListener('visibilitychange', onVisible);
+    navigator.serviceWorker?.addEventListener('message', onRenewed);
+    return () => {
+      window.removeEventListener('online', sync);
+      document.removeEventListener('visibilitychange', onVisible);
+      navigator.serviceWorker?.removeEventListener('message', onRenewed);
+    };
   },[groups,hiddenRiderIds,currentUser]);
 
   useEffect(()=>{
@@ -1110,9 +1150,6 @@ export default function App() {
       localStorage.removeItem('rider_push_identity_notice');
       showToast('Bildirimler açıldı. İki telefonda da profilinizdeki yeni sürücü ID’leriyle birbirinizi ekleyin.',10000);
     }
-    const changed=(event:MessageEvent)=>{if(event.data?.type==='PUSH_SUBSCRIPTION_CHANGED')showToast('Bildirim aboneliği yenilenmeli. Bildirim Ayarları’ndan tekrar açın.',7000);};
-    navigator.serviceWorker?.addEventListener('message',changed);
-    return()=>navigator.serviceWorker?.removeEventListener('message',changed);
   },[]);
 
   // Save custom Supabase configuration
