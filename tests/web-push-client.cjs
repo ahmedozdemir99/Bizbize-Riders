@@ -15,6 +15,11 @@ const requests=[];let subscribed=false;
    const request=route.request(),url=new URL(request.url());let body={};
    if(url.pathname==='/auth/v1/signup')body={access_token:token,refresh_token:'fixture-refresh',expires_in:3600,expires_at:now+3600,token_type:'bearer',user:{id:uid,aud:'authenticated',role:'authenticated',app_metadata:{provider:'anonymous',providers:['anonymous']},user_metadata:{},created_at:new Date().toISOString(),is_anonymous:true}};
    else if(url.pathname==='/functions/v1/push'){
+    assert.equal(request.method(),'GET');
+    assert.equal(request.headers().apikey,undefined,'Gateway discovery should avoid a CORS preflight');
+    await route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({code:'NOT_FOUND'})});
+    return;
+   }else if(url.pathname==='/functions/v1/rapid-task'){
     if(request.method()==='GET')body={publicKey};
     else {const data=request.postDataJSON();requests.push(data);assert.equal(request.headers().authorization,'Bearer '+token);
      if(data.action==='subscribe'){assert(!('userId' in data));assert(!('deviceId' in data));subscribed=true;body={userId:uid,subscribed:true,id:'sub1'};}
